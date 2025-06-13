@@ -1,11 +1,10 @@
 package consultor
 
 import (
-	"gorm.io/gorm"
 	"api/internal/contrato"
 	"api/internal/negociacao"
 	"time"
-	
+	"gorm.io/gorm"
 )
 
 type Repository interface {
@@ -15,7 +14,6 @@ type Repository interface {
 	ListarTodos(db *gorm.DB) ([]Consultor, error)
 	Atualizar(db *gorm.DB, id uint, novosDados *Consultor) error
 	Deletar(db *gorm.DB, id uint) error
-
 }
 
 type repositoryImpl struct{}
@@ -36,12 +34,19 @@ func (r *repositoryImpl) Salvar(db *gorm.DB, c *Consultor) error {
 
 func (r *repositoryImpl) BuscarPorID(db *gorm.DB, id uint) (*Consultor, error) {
 	var consultor Consultor
-	err := db.First(&consultor, id).Error
+	err := db.Preload("Negociacoes.Contrato").
+		Preload("Negociacoes.Comentarios").
+		Preload("Contratos").
+		First(&consultor, id).Error
 	return &consultor, err
 }
+
 func (r *repositoryImpl) ListarTodos(db *gorm.DB) ([]Consultor, error) {
 	var consultores []Consultor
-	err := db.Find(&consultores).Error
+	err := db.Preload("Negociacoes.Contrato").
+		Preload("Negociacoes.Comentarios").
+		Preload("Contratos").
+		Find(&consultores).Error
 	return consultores, err
 }
 
@@ -50,12 +55,12 @@ func (r *repositoryImpl) Atualizar(db *gorm.DB, id uint, novosDados *Consultor) 
 	if err := db.First(&existente, id).Error; err != nil {
 		return err
 	}
-existente.Nome = novosDados.Nome
-existente.Sobrenome = novosDados.Sobrenome
-existente.CNPJ = novosDados.CNPJ
-existente.Email = novosDados.Email
-existente.Telefone = novosDados.Telefone
-existente.Foto = novosDados.Foto  // ✅ adiciona isso
+	existente.Nome = novosDados.Nome
+	existente.Sobrenome = novosDados.Sobrenome
+	existente.CNPJ = novosDados.CNPJ
+	existente.Email = novosDados.Email
+	existente.Telefone = novosDados.Telefone
+	existente.Foto = novosDados.Foto
 
 	return db.Save(&existente).Error
 }
@@ -63,7 +68,13 @@ existente.Foto = novosDados.Foto  // ✅ adiciona isso
 func (r *repositoryImpl) Deletar(db *gorm.DB, id uint) error {
 	return db.Delete(&Consultor{}, id).Error
 }
-func MontarResumoConsultorDTO(consultor Consultor, contratos []Contrato, negociacoes []negociacao.Negociacao) ResumoConsultorDTO {
+
+// MontarResumoConsultorDTO gera um resumo de métricas do consultor
+func MontarResumoConsultorDTO(
+	consultor Consultor,
+	contratos []contrato.Contrato,
+	negociacoes []negociacao.Negociacao,
+) ResumoConsultorDTO {
 	var recebida, aReceber float64
 	now := time.Now()
 
