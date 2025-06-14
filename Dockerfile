@@ -1,13 +1,13 @@
-FROM golang:1.22-alpine
+FROM golang:1.24-alpine
 
 WORKDIR /app
 
-COPY go.mod ./
-COPY go.sum ./
+# Copia os arquivos de dependências e baixa módulos
+COPY go.mod go.sum ./
 RUN go mod download
 
+# Copia o restante do código e compila
 COPY . .
-
 RUN go build -o main ./cmd/main.go
 
 EXPOSE 8080

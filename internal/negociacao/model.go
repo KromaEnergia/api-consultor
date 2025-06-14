@@ -1,8 +1,8 @@
 package negociacao
 
 import (
-	"api/internal/comentario"
-	"api/internal/contrato"
+	"github.com/KromaEnergia/api-consultor/internal/comentario"
+	"github.com/KromaEnergia/api-consultor/internal/contrato"
 
 	"gorm.io/gorm"
 )

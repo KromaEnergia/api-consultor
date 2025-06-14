@@ -1,8 +1,8 @@
 package consultor
 
 import (
-	"api/internal/contrato" // ← importe aqui
-	"api/internal/negociacao"
+	"github.com/KromaEnergia/api-consultor/internal/contrato"
+	"github.com/KromaEnergia/api-consultor/internal/negociacao"
 
 	"gorm.io/gorm"
 )
@@ -17,6 +17,7 @@ type Consultor struct {
 	Foto                  string                  `json:"foto"`
 	Senha                 string                  `json:"-"`
 	PrecisaRedefinirSenha bool                    `json:"-"`
+	IsAdmin               bool                    `json:"isAdmin"` // ← nova flag
 	Negociacoes           []negociacao.Negociacao `gorm:"foreignKey:ConsultorID" json:"negociacoes"`
-	Contratos             []contrato.Contrato     `gorm:"foreignKey:ConsultorID" json:"contratos"` // ← adicione isto
+	Contratos             []contrato.Contrato     `gorm:"foreignKey:ConsultorID" json:"contratos"`
 }

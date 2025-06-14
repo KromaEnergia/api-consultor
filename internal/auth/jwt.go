@@ -7,11 +7,17 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 )
 
 var jwtSecret []byte
 
 func init() {
+	// Carrega variáveis do .env (procura por .env na raiz do projeto)
+	if err := godotenv.Load(); err != nil {
+		log.Println("Aviso: não foi possível carregar .env, usando variáveis de ambiente do sistema")
+	}
+
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		log.Fatal("JWT_SECRET não definida")
@@ -19,15 +25,18 @@ func init() {
 	jwtSecret = []byte(secret)
 }
 
+// Claims define o payload do JWT
 type Claims struct {
-	UserID uint `json:"user_id"`
+	UserID  uint `json:"user_id"`
+	IsAdmin bool `json:"is_admin"`
 	jwt.RegisteredClaims
 }
 
-// GerarToken gera um JWT com validade de 24h
-func GerarToken(userID uint) (string, error) {
+// GerarToken cria um JWT com UserID e IsAdmin
+func GerarToken(userID uint, isAdmin bool) (string, error) {
 	claims := &Claims{
-		UserID: userID,
+		UserID:  userID,
+		IsAdmin: isAdmin,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},
@@ -36,7 +45,7 @@ func GerarToken(userID uint) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
-// ValidarToken valida o token e retorna as claims
+// ValidarToken decodifica e verifica o JWT
 func ValidarToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil

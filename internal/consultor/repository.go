@@ -1,9 +1,10 @@
 package consultor
 
 import (
-	"api/internal/contrato"
-	"api/internal/negociacao"
 	"time"
+
+	"github.com/KromaEnergia/api-consultor/internal/contrato"
+	"github.com/KromaEnergia/api-consultor/internal/negociacao"
 	"gorm.io/gorm"
 )
 
