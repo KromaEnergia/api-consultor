@@ -1,3 +1,4 @@
+// internal/negociacao/handler.go
 package negociacao
 
 import (
@@ -5,39 +6,93 @@ import (
 	"net/http"
 	"strconv"
 
-
+	"github.com/KromaEnergia/api-consultor/internal/auth"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 )
 
+// Handler encapsula DB e repository
 type Handler struct {
 	DB         *gorm.DB
 	Repository Repository
 }
 
+// NewHandler cria um novo handler de negociações
 func NewHandler(db *gorm.DB) *Handler {
-	return &Handler{DB: db, Repository: NewRepository()}
+	return &Handler{
+		DB:         db,
+		Repository: NewRepository(),
+	}
 }
 
-// POST /negociacoes
+// negociacaoDTO é o payload de criação/atualização (sem ConsultorID)
+type negociacaoDTO struct {
+	Nome                string `json:"nome"`
+	Contato             string `json:"contato"`
+	Telefone            string `json:"telefone"`
+	CNPJ                string `json:"cnpj"`
+	Logo                string `json:"logo"`
+	AnexoFatura         string `json:"anexoFatura"`
+	AnexoEstudo         string `json:"anexoEstudo"`
+	ContratoKC          string `json:"contratoKC"`
+	AnexoContratoSocial string `json:"anexoContratoSocial"`
+	Status              string `json:"status"`
+	Produtos            string `json:"produtos"`
+	KromaTake           bool   `json:"kromaTake"`
+	UF                  string `json:"uf"`
+}
+
+// Criar trata POST /negociacoes
 func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
-	var n Negociacao
-	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+	// 1) Captura consultorID do JWT
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+
+	// 2) Decodifica DTO
+	var dto negociacaoDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
+
+	// 3) Monta o modelo
+	n := Negociacao{
+		Nome:                dto.Nome,
+		Contato:             dto.Contato,
+		Telefone:            dto.Telefone,
+		CNPJ:                dto.CNPJ,
+		Logo:                dto.Logo,
+		AnexoFatura:         dto.AnexoFatura,
+		AnexoEstudo:         dto.AnexoEstudo,
+		ContratoKC:          dto.ContratoKC,
+		AnexoContratoSocial: dto.AnexoContratoSocial,
+		Status:              dto.Status,
+		Produtos:            dto.Produtos,
+		KromaTake:           dto.KromaTake,
+		UF:                  dto.UF,
+		ConsultorID:         consultorID,
+	}
+
+	// 4) Persiste
 	if err := h.Repository.Salvar(h.DB, &n); err != nil {
 		http.Error(w, "Erro ao salvar negociação", http.StatusInternalServerError)
 		return
 	}
+
+	// 5) Retorna JSON
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(n)
 }
 
-// GET /consultores/{id}/negociacoes
+// ListarPorConsultor trata GET /consultores/{id}/negociacoes
 func (h *Handler) ListarPorConsultor(w http.ResponseWriter, r *http.Request) {
-	consultorID, _ := strconv.Atoi(mux.Vars(r)["id"])
-	list, err := h.Repository.ListarPorConsultor(h.DB, uint(consultorID))
+	cid, _ := strconv.Atoi(mux.Vars(r)["id"])
+	list, err := h.Repository.ListarPorConsultor(h.DB, uint(cid))
 	if err != nil {
 		http.Error(w, "Erro ao listar negociações", http.StatusInternalServerError)
 		return
@@ -45,7 +100,7 @@ func (h *Handler) ListarPorConsultor(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-// GET /negociacoes/{id}
+// BuscarPorID trata GET /negociacoes/{id}
 func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	n, err := h.Repository.BuscarPorID(h.DB, uint(id))
@@ -56,29 +111,71 @@ func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(n)
 }
 
-// PUT /negociacoes/{id}
+// Atualizar trata PUT /negociacoes/{id}
 func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(mux.Vars(r)["id"])
-	var n Negociacao
-	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+	// 1) ID da URL
+	idParam := mux.Vars(r)["id"]
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 2) Verifica autenticação e pega consultorID
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+
+	// 3) Busca registro existente
+	var existing Negociacao
+	if err := h.DB.First(&existing, id).Error; err != nil {
+		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+
+	// 4) Decodifica DTO
+	var dto negociacaoDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
-	n.ID = uint(id)
-	if err := h.Repository.Atualizar(h.DB, &n); err != nil {
-		http.Error(w, "Erro ao atualizar", http.StatusInternalServerError)
+
+	// 5) Atualiza campos mutáveis
+	existing.Nome = dto.Nome
+	existing.Contato = dto.Contato
+	existing.Telefone = dto.Telefone
+	existing.CNPJ = dto.CNPJ
+	existing.Logo = dto.Logo
+	existing.AnexoFatura = dto.AnexoFatura
+	existing.AnexoEstudo = dto.AnexoEstudo
+	existing.ContratoKC = dto.ContratoKC
+	existing.AnexoContratoSocial = dto.AnexoContratoSocial
+	existing.Status = dto.Status
+	existing.Produtos = dto.Produtos
+	existing.KromaTake = dto.KromaTake
+	existing.UF = dto.UF
+	existing.ConsultorID = consultorID
+
+	// 6) Persiste atualização
+	if err := h.Repository.Atualizar(h.DB, &existing); err != nil {
+		http.Error(w, "Erro ao atualizar negociação", http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(n)
+
+	// 7) Retorna JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(existing)
 }
 
-// DELETE /negociacoes/{id}
+// Deletar trata DELETE /negociacoes/{id}
 func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	if err := h.Repository.Deletar(h.DB, uint(id)); err != nil {
-		http.Error(w, "Erro ao excluir", http.StatusInternalServerError)
+		http.Error(w, "Erro ao excluir negociação", http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }

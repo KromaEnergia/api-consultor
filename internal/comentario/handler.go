@@ -21,13 +21,32 @@ func NewHandler(db *gorm.DB) *Handler {
 	}
 }
 
+// POST /negociacoes/{id}/comentarios
 func (h *Handler) CriarComentario(w http.ResponseWriter, r *http.Request) {
-	var c Comentario
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, "Erro ao decodificar JSON", http.StatusBadRequest)
+	// 1) Pega o ID da negociação da URL
+	idStr := mux.Vars(r)["id"]
+	negID, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "ID de negociação inválido", http.StatusBadRequest)
 		return
 	}
 
+	// 2) Decodifica payload mínimo
+	var dto struct {
+		Texto string `json:"texto"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		http.Error(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 3) Monta o Comentario com o negociacao_id correto
+	c := Comentario{
+		Texto:        dto.Texto,
+		NegociacaoID: uint(negID),
+	}
+
+	// 4) Salva e retorna
 	if err := h.Repository.Criar(h.DB, &c); err != nil {
 		http.Error(w, "Erro ao criar comentário", http.StatusInternalServerError)
 		return
@@ -62,6 +81,7 @@ func (h *Handler) RemoverComentario(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Comentário removido com sucesso"))
 }
+
 // GET /comentarios
 func (h *Handler) ListarTodos(w http.ResponseWriter, r *http.Request) {
 	comentarios, err := h.Repository.ListarTodos(h.DB)

@@ -8,13 +8,13 @@ import (
 	"github.com/KromaEnergia/api-consultor/internal/auth"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
-	"github.com/KromaEnergia/api-consultor/internal/utils"
-
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
-// request DTOs
+// DTOs
+
 type LoginRequest struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
@@ -31,21 +31,18 @@ type createConsultorRequest struct {
 	IsAdmin   bool   `json:"isAdmin"`
 }
 
-// Handler encapsula DB e repository
+// Handler encapsula DB e repo
 type Handler struct {
 	DB         *gorm.DB
 	Repository Repository
 }
 
-// NewHandler retorna um handler inicializado
+// NewHandler cria Handler
 func NewHandler(db *gorm.DB) *Handler {
-	return &Handler{
-		DB:         db,
-		Repository: NewRepository(),
-	}
+	return &Handler{DB: db, Repository: NewRepository()}
 }
 
-// Login gera um JWT para credenciais válidas
+// Login gera JWT
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -53,20 +50,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Busca usuário por email ou CNPJ
 	user, err := h.Repository.BuscarPorEmailOuCNPJ(h.DB, req.Login)
 	if err != nil {
 		http.Error(w, "credenciais inválidas", http.StatusUnauthorized)
 		return
 	}
 
-	// Verifica senha
-	if !utils.CheckSenha(user.Senha, req.Password) {
+	// Compare bcrypt hash
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Senha), []byte(req.Password)); err != nil {
 		http.Error(w, "senha incorreta", http.StatusUnauthorized)
 		return
 	}
 
-	// Gera token
 	token, err := auth.GerarToken(user.ID, user.IsAdmin)
 	if err != nil {
 		http.Error(w, "erro ao gerar token", http.StatusInternalServerError)
@@ -77,7 +72,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
-// CriarConsultor cadastra novo consultor (livre de autenticação)
+// CriarConsultor cadastro público
 func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 	var req createConsultorRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -85,14 +80,13 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Gera hash da senha
-	hash, err := utils.HashSenha(req.Senha)
+	// Hash bcrypt
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Senha), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, "erro ao processar senha", http.StatusInternalServerError)
 		return
 	}
 
-	// Monta modelo
 	c := Consultor{
 		Nome:                  req.Nome,
 		Sobrenome:             req.Sobrenome,
@@ -100,7 +94,7 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		Email:                 req.Email,
 		Telefone:              req.Telefone,
 		Foto:                  req.Foto,
-		Senha:                 hash,
+		Senha:                 string(hash),
 		PrecisaRedefinirSenha: false,
 		IsAdmin:               req.IsAdmin,
 	}
@@ -243,13 +237,17 @@ func (h *Handler) ObterResumoConsultor(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(dto)
 }
 
-// Me retorna o usuário logado
+// GET /consultores/me
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
 
 	var c Consultor
-	if err := h.DB.First(&c, userID).Error; err != nil {
-		http.Error(w, "consultor não encontrado", http.StatusNotFound)
+	// Preload das associações negociacoes e contratos
+	if err := h.DB.
+		Preload("Negociacoes").
+		Preload("Contratos").
+		First(&c, userID).Error; err != nil {
+		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
 		return
 	}
 
