@@ -15,20 +15,42 @@ import (
 
 // DTOs
 
+type SolicitacaoCNPJRequest struct {
+	NovoCNPJ string `json:"novoCnpj"`
+}
+
+type AprovarCNPJRequest struct {
+	Aprovado bool `json:"aprovado"`
+}
+
+type AtualizarTermoRequest struct {
+	URL string `json:"url"`
+}
+
 type LoginRequest struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
 }
+type SolicitacaoEmailRequest struct {
+	NovoEmail string `json:"novoEmail"`
+}
+
+type AprovarEmailRequest struct {
+	Aprovado bool `json:"aprovado"`
+}
 
 type createConsultorRequest struct {
-	Nome      string `json:"nome"`
-	Sobrenome string `json:"sobrenome"`
-	CNPJ      string `json:"cnpj"`
-	Email     string `json:"email"`
-	Telefone  string `json:"telefone"`
-	Foto      string `json:"foto"`
-	Senha     string `json:"senha"`
-	IsAdmin   bool   `json:"isAdmin"`
+	Nome            string     `json:"nome"`
+	Sobrenome       string     `json:"sobrenome"`
+	CNPJ            string     `json:"cnpj"`
+	Email           string     `json:"email"`
+	Telefone        string     `json:"telefone"`
+	Foto            string     `json:"foto"`
+	Senha           string     `json:"senha"`
+	IsAdmin         bool       `json:"isAdmin"`
+	TermoDeParceria string     `json:"termoDeParceria,omitempty"`
+	DataNascimento  CustomDate `json:"dataNascimento,omitempty"`
+	Estado          string     `json:"estado,omitempty"`
 }
 
 // Handler encapsula DB e repo
@@ -97,6 +119,9 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		Senha:                 string(hash),
 		PrecisaRedefinirSenha: false,
 		IsAdmin:               req.IsAdmin,
+		TermoDeParceria:       req.TermoDeParceria,
+		DataNascimento:        req.DataNascimento,
+		Estado:                req.Estado,
 	}
 
 	if err := h.Repository.Salvar(h.DB, &c); err != nil {
@@ -253,4 +278,291 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(c)
+}
+
+// SolicitarAlteracaoCNPJ permite que um consultor peça a mudança do seu CNPJ
+func (h *Handler) SolicitarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	// Um consultor só pode solicitar para si mesmo
+	if !isAdmin && uint(id) != userID {
+		http.Error(w, "acesso negado", http.StatusForbidden)
+		return
+	}
+
+	var req SolicitacaoCNPJRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	if req.NovoCNPJ == "" {
+		http.Error(w, "o campo 'novoCnpj' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// Busca o consultor para atualizar
+	consultor, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		http.Error(w, "consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	// Atualiza apenas os campos da solicitação
+	consultor.RequestedCNPJ = req.NovoCNPJ
+	consultor.CNPJChangeApproved = false // Reseta a aprovação a cada nova solicitação
+
+	if err := h.Repository.Salvar(h.DB, consultor); err != nil {
+		http.Error(w, "erro ao salvar solicitação", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ enviada para aprovação."})
+}
+
+// GerenciarAlteracaoCNPJ permite que um admin aprove ou negue a mudança de CNPJ
+func (h *Handler) GerenciarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request) {
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	// Apenas admins podem aprovar/negar
+	if !isAdmin {
+		http.Error(w, "acesso negado, rota exclusiva para administradores", http.StatusForbidden)
+		return
+	}
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	var req AprovarCNPJRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	consultor, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		http.Error(w, "consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	if consultor.RequestedCNPJ == "" {
+		http.Error(w, "não há solicitação de CNPJ pendente para este consultor", http.StatusBadRequest)
+		return
+	}
+
+	if req.Aprovado {
+		// Se aprovado, atualiza o CNPJ principal e limpa a solicitação
+		consultor.CNPJ = consultor.RequestedCNPJ
+		consultor.RequestedCNPJ = ""
+		consultor.CNPJChangeApproved = true
+	} else {
+		// Se negado, apenas limpa a solicitação
+		consultor.RequestedCNPJ = ""
+		consultor.CNPJChangeApproved = false
+	}
+
+	if err := h.Repository.Salvar(h.DB, consultor); err != nil {
+		http.Error(w, "erro ao processar a solicitação", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ gerenciada com sucesso."})
+}
+
+// AtualizarTermoDeParceria permite que um consultor adicione/atualize seu link do termo
+func (h *Handler) AtualizarTermoDeParceria(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	// Um consultor só pode atualizar o seu próprio termo
+	if !isAdmin && uint(id) != userID {
+		http.Error(w, "acesso negado", http.StatusForbidden)
+		return
+	}
+
+	var req AtualizarTermoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		http.Error(w, "o campo 'url' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	consultor, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		http.Error(w, "consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	// Atualiza apenas o termo de parceria
+	consultor.TermoDeParceria = req.URL
+
+	if err := h.Repository.Salvar(h.DB, consultor); err != nil {
+		http.Error(w, "erro ao salvar termo de parceria", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Termo de parceria atualizado com sucesso."})
+}
+
+// Em seu handler.go
+
+func (h *Handler) AtualizarMeuPerfil(w http.ResponseWriter, r *http.Request) {
+	// 1. Pega o ID do usuário que vem do token de autenticação
+	userID, ok := r.Context().Value(auth.UsuarioIDKey).(uint)
+	if !ok {
+		http.Error(w, "ID de usuário inválido no token", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Busca o registro ATUAL do consultor no banco de dados
+	var consultorExistente Consultor
+	if err := h.DB.First(&consultorExistente, userID).Error; err != nil {
+		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	// 3. Decodifica os novos dados POR CIMA do registro existente.
+	// Campos não enviados no JSON (como CNPJ) não serão alterados.
+	if err := json.NewDecoder(r.Body).Decode(&consultorExistente); err != nil {
+		http.Error(w, "Payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 4. Salva o objeto completo e atualizado de volta no banco
+	if err := h.DB.Save(&consultorExistente).Error; err != nil {
+		http.Error(w, "Erro ao atualizar o perfil", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(consultorExistente) // Retorna o perfil atualizado
+}
+
+// SolicitarAlteracaoEmail permite que um consultor peça a mudança do seu e-mail.
+func (h *Handler) SolicitarAlteracaoEmail(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	// Um consultor só pode solicitar para si mesmo (a menos que seja admin).
+	if !isAdmin && uint(id) != userID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
+	var req SolicitacaoEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	if req.NovoEmail == "" {
+		http.Error(w, "O campo 'novoEmail' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// Busca o consultor para atualizar.
+	consultor, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	// Atualiza os campos da solicitação de e-mail.
+	consultor.RequestedEmail = req.NovoEmail
+	consultor.EmailChangeApproved = false // Reseta a aprovação a cada nova solicitação.
+
+	if err := h.Repository.Salvar(h.DB, consultor); err != nil {
+		http.Error(w, "Erro ao salvar solicitação de e-mail", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail enviada para aprovação."})
+}
+
+// GerenciarAlteracaoEmail permite que um admin aprove ou negue a mudança de e-mail.
+func (h *Handler) GerenciarAlteracaoEmail(w http.ResponseWriter, r *http.Request) {
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	// Apenas admins podem aprovar/negar.
+	if !isAdmin {
+		http.Error(w, "Acesso negado, rota exclusiva para administradores", http.StatusForbidden)
+		return
+	}
+
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+
+	var req AprovarEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	consultor, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
+		return
+	}
+
+	if consultor.RequestedEmail == "" {
+		http.Error(w, "Não há solicitação de e-mail pendente para este consultor", http.StatusBadRequest)
+		return
+	}
+
+	if req.Aprovado {
+		// Se aprovado, atualiza o e-mail principal e limpa a solicitação.
+		consultor.Email = consultor.RequestedEmail
+		consultor.RequestedEmail = ""
+		consultor.EmailChangeApproved = true
+	} else {
+		// Se negado, apenas limpa a solicitação.
+		consultor.RequestedEmail = ""
+		consultor.EmailChangeApproved = false
+	}
+
+	if err := h.Repository.Salvar(h.DB, consultor); err != nil {
+		http.Error(w, "Erro ao processar a solicitação de e-mail", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail gerenciada com sucesso."})
 }

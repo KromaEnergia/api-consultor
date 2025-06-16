@@ -69,14 +69,21 @@ func main() {
 
 	// Consultores
 	authRoutes.HandleFunc("/consultores", consultorHandler.ListarConsultores).Methods("GET")
-	// 1) Rota estática “me” vem primeiro
 	authRoutes.HandleFunc("/consultores/me", consultorHandler.Me).Methods("GET")
-	// 2) Rotas dinâmicas só para IDs numéricos
 	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.BuscarPorID).Methods("GET")
 	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.AtualizarConsultor).Methods("PUT")
 	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.DeletarConsultor).Methods("DELETE")
-	// Resumo também é uma rota estática após o “me”
 	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/resumo", consultorHandler.ObterResumoConsultor).Methods("GET")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/solicitar-cnpj", consultorHandler.SolicitarAlteracaoCNPJ).Methods("PUT")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/gerenciar-cnpj", consultorHandler.GerenciarAlteracaoCNPJ).Methods("POST")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/termo-parceria", consultorHandler.AtualizarTermoDeParceria).Methods("PUT")
+	authRoutes.HandleFunc("/consultores/me", consultorHandler.AtualizarMeuPerfil).Methods("PUT")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/solicitar-email", consultorHandler.SolicitarAlteracaoEmail).Methods("PUT")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/gerenciar-email", consultorHandler.GerenciarAlteracaoEmail).Methods("POST")
+
+	// 2) Rotas dinâmicas com ID (usadas por admins ou para outros fins)
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.BuscarPorID).Methods("GET")
+	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.AtualizarConsultor).Methods("PUT")
 
 	// Negociações
 	negHandler := negociacao.NewHandler(db)
@@ -85,6 +92,7 @@ func main() {
 	authRoutes.HandleFunc("/consultores/{id}/negociacoes", negHandler.ListarPorConsultor).Methods("GET")
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Atualizar).Methods("PUT")
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Deletar).Methods("DELETE")
+	authRoutes.HandleFunc("/negociacoes/{id:[0-9]+}/arquivos", negHandler.AdicionarArquivos).Methods("POST")
 
 	// Contratos
 	contratoHandler := contrato.NewHandler(db)

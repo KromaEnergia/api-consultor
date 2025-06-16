@@ -11,6 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
+type AdicionarArquivosRequest struct {
+	NovosArquivos []string `json:"novosArquivos"`
+}
+
 // Handler encapsula DB e repository
 type Handler struct {
 	DB         *gorm.DB
@@ -27,19 +31,20 @@ func NewHandler(db *gorm.DB) *Handler {
 
 // negociacaoDTO é o payload de criação/atualização (sem ConsultorID)
 type negociacaoDTO struct {
-	Nome                string `json:"nome"`
-	Contato             string `json:"contato"`
-	Telefone            string `json:"telefone"`
-	CNPJ                string `json:"cnpj"`
-	Logo                string `json:"logo"`
-	AnexoFatura         string `json:"anexoFatura"`
-	AnexoEstudo         string `json:"anexoEstudo"`
-	ContratoKC          string `json:"contratoKC"`
-	AnexoContratoSocial string `json:"anexoContratoSocial"`
-	Status              string `json:"status"`
-	Produtos            string `json:"produtos"`
-	KromaTake           bool   `json:"kromaTake"`
-	UF                  string `json:"uf"`
+	Nome                string      `json:"nome"`
+	Contato             string      `json:"contato"`
+	Telefone            string      `json:"telefone"`
+	CNPJ                string      `json:"cnpj"`
+	Logo                string      `json:"logo"`
+	AnexoFatura         string      `json:"anexoFatura"`
+	AnexoEstudo         string      `json:"anexoEstudo"`
+	ContratoKC          string      `json:"contratoKC"`
+	AnexoContratoSocial string      `json:"anexoContratoSocial"`
+	Status              string      `json:"status"`
+	Produtos            string      `json:"produtos"`
+	KromaTake           bool        `json:"kromaTake"`
+	UF                  string      `json:"uf"`
+	Arquivos            StringSlice `gorm:"type:text" json:"arquivos,omitempty"`
 }
 
 // Criar trata POST /negociacoes
@@ -75,6 +80,7 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 		KromaTake:           dto.KromaTake,
 		UF:                  dto.UF,
 		ConsultorID:         consultorID,
+		Arquivos:            dto.Arquivos,
 	}
 
 	// 4) Persiste
@@ -158,6 +164,7 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	existing.KromaTake = dto.KromaTake
 	existing.UF = dto.UF
 	existing.ConsultorID = consultorID
+	existing.Arquivos = dto.Arquivos
 
 	// 6) Persiste atualização
 	if err := h.Repository.Atualizar(h.DB, &existing); err != nil {
@@ -178,4 +185,64 @@ func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Esta função adiciona novas URLs de arquivos ao slice 'Arquivos' de uma negociação existente.
+func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
+	// 1. Pega o ID da negociação da URL.
+	idParam := mux.Vars(r)["id"]
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		http.Error(w, "ID da negociação inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Garante que o usuário está autenticado e pega seu ID.
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "Não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+
+	// 3. Decodifica o payload com as novas URLs dos arquivos.
+	var req AdicionarArquivosRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+	if len(req.NovosArquivos) == 0 {
+		http.Error(w, "A lista 'novosArquivos' não pode estar vazia", http.StatusBadRequest)
+		return
+	}
+
+	// 4. Busca a negociação existente no banco de dados.
+	var negociacaoExistente Negociacao
+	if err := h.DB.First(&negociacaoExistente, id).Error; err != nil {
+		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+
+	// 5. ✅ VERIFICAÇÃO DE SEGURANÇA:
+	// Garante que o consultor logado é o "dono" desta negociação.
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	if !isAdmin && negociacaoExistente.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado: você não tem permissão para modificar esta negociação", http.StatusForbidden)
+		return
+	}
+
+	// 6. Adiciona os novos arquivos ao slice existente.
+	// A função 'append' do Go lida com isso de forma eficiente.
+	negociacaoExistente.Arquivos = append(negociacaoExistente.Arquivos, req.NovosArquivos...)
+
+	// 7. Salva a negociação atualizada no banco.
+	if err := h.Repository.Atualizar(h.DB, &negociacaoExistente); err != nil {
+		http.Error(w, "Erro ao salvar os novos arquivos", http.StatusInternalServerError)
+		return
+	}
+
+	// 8. Retorna a negociação completa e atualizada.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(negociacaoExistente)
 }
