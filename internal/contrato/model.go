@@ -14,7 +14,7 @@ type Contrato struct {
 	InicioSuprimento time.Time `json:"inicioSuprimento"`
 	FimSuprimento    time.Time `json:"fimSuprimento"`
 	ValorIntegral    bool      `json:"valorIntegral"`
-	Status           string    `json:"status"`
+	Status           string    `json:"negociacao.Status"`
 
 	// Nova lógica de fee
 	Fee        bool    `json:"fee"`        // habilita fee

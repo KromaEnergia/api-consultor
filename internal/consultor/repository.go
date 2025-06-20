@@ -1,6 +1,7 @@
 package consultor
 
 import (
+	"strings"
 	"time"
 
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
@@ -23,10 +24,18 @@ func NewRepository() Repository {
 	return &repositoryImpl{}
 }
 
+// Busca primeiro por e-mail, depois por CNPJ, para evitar ambiguidade
 func (r *repositoryImpl) BuscarPorEmailOuCNPJ(db *gorm.DB, valor string) (*Consultor, error) {
-	var consultor Consultor
-	err := db.Where("email = ? OR cnpj = ?", valor, valor).First(&consultor).Error
-	return &consultor, err
+	var c Consultor
+
+	if err := db.Where("email = ?", valor).First(&c).Error; err == nil {
+		return &c, nil
+	}
+	if err := db.Where("cnpj = ?", valor).First(&c).Error; err == nil {
+		return &c, nil
+	}
+
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (r *repositoryImpl) Salvar(db *gorm.DB, c *Consultor) error {
@@ -56,6 +65,7 @@ func (r *repositoryImpl) Atualizar(db *gorm.DB, id uint, novosDados *Consultor) 
 	if err := db.First(&existente, id).Error; err != nil {
 		return err
 	}
+
 	existente.Nome = novosDados.Nome
 	existente.Sobrenome = novosDados.Sobrenome
 	existente.CNPJ = novosDados.CNPJ
@@ -70,7 +80,7 @@ func (r *repositoryImpl) Deletar(db *gorm.DB, id uint) error {
 	return db.Delete(&Consultor{}, id).Error
 }
 
-// MontarResumoConsultorDTO gera um resumo de métricas do consultor
+// Monta um DTO com os principais dados e métricas do consultor
 func MontarResumoConsultorDTO(
 	consultor Consultor,
 	contratos []contrato.Contrato,
@@ -97,7 +107,8 @@ func MontarResumoConsultorDTO(
 
 	ativas := 0
 	for _, n := range negociacoes {
-		if n.Status == "ativa" {
+		statusLower := strings.ToLower(strings.TrimSpace(n.Status))
+		if statusLower == "negociação ativa" || statusLower == "ativa" {
 			ativas++
 		}
 	}

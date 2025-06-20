@@ -78,7 +78,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compare bcrypt hash
+	// Comparar senha
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Senha), []byte(req.Password)); err != nil {
 		http.Error(w, "senha incorreta", http.StatusUnauthorized)
 		return

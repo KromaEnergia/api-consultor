@@ -161,14 +161,13 @@ func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Comissoes retorna o total de comissões recebidas e a receber só para o consultor logado
 func (h *Handler) Comissoes(w http.ResponseWriter, r *http.Request) {
 	type ComissaoTotal struct {
 		ComissoesRecebidas float64 `json:"comissoesRecebidas"`
 		ComissoesAReceber  float64 `json:"comissoesAReceber"`
 	}
 
-	// Pega o ID do consultor autenticado
+	// 1) Pega o ID do consultor autenticado
 	userIDVal := r.Context().Value(auth.UsuarioIDKey)
 	if userIDVal == nil {
 		http.Error(w, "não autenticado", http.StatusUnauthorized)
@@ -176,36 +175,56 @@ func (h *Handler) Comissoes(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userIDVal.(uint)
 
-	// Busca apenas contratos desse consultor
+	// 2) Busca apenas contratos deste consultor
+	//    **e** cujas negociações correspondentes tenham status = "Contrato Fechado"
 	var contratos []Contrato
 	if err := h.DB.
-		Where("consultor_id = ?", consultorID).
+		Joins("JOIN negociacaos n ON n.id = contratos.negociacao_id").
+		Where("contratos.consultor_id = ? AND n.status = ?", consultorID, "Contrato Fechado").
 		Find(&contratos).Error; err != nil {
 		http.Error(w, "Erro ao buscar contratos", http.StatusInternalServerError)
+		return
+	}
+
+	// 3) Se não vier nada, logo não há comissões a somar
+	if len(contratos) == 0 {
+		resp := ComissaoTotal{ComissoesRecebidas: 0, ComissoesAReceber: 0}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
 	now := time.Now()
 	var totalRec, totalARec float64
 
+	// função auxiliar para meses inclusivos
 	monthsBetween := func(start, end time.Time) int {
 		y1, m1, _ := start.Date()
 		y2, m2, _ := end.Date()
-		total := int((y2-y1)*12 + int(m2-m1))
-		return total + 1
+		diff := int((y2-y1)*12 + int(m2-m1))
+		return diff + 1
 	}
 
 	for _, c := range contratos {
-		// Fee
+		// FEE: dividido em 2 parcelas, início e fim
 		if c.Fee {
-			val := c.Valor * c.FeePercent
+			feeTotal := c.Valor * c.FeePercent
+			half := feeTotal / 2
+			// primeira metade no mês de início
 			if now.After(c.InicioSuprimento) || now.Equal(c.InicioSuprimento) {
-				totalRec += val
+				totalRec += half
 			} else {
-				totalARec += val
+				totalARec += half
+			}
+			// segunda metade no mês de fim
+			if now.After(c.FimSuprimento) || now.Equal(c.FimSuprimento) {
+				totalRec += half
+			} else {
+				totalARec += half
 			}
 		}
-		// UniPay
+
+		// UniPay (único pagamento)
 		if c.UniPay {
 			val := c.Valor * c.UniPayPercent
 			if now.After(c.InicioSuprimento) || now.Equal(c.InicioSuprimento) {
@@ -214,7 +233,8 @@ func (h *Handler) Comissoes(w http.ResponseWriter, r *http.Request) {
 				totalARec += val
 			}
 		}
-		// MonPay
+
+		// MonPay (mensal)
 		if c.MonPay {
 			months := monthsBetween(c.InicioSuprimento, c.FimSuprimento)
 			if months <= 0 {
@@ -224,10 +244,8 @@ func (h *Handler) Comissoes(w http.ResponseWriter, r *http.Request) {
 
 			switch {
 			case now.Before(c.InicioSuprimento):
-				// tudo a receber
 				totalARec += totalValue
 			case now.After(c.FimSuprimento) || now.Equal(c.FimSuprimento):
-				// tudo recebido
 				totalRec += totalValue
 			default:
 				elapsed := monthsBetween(c.InicioSuprimento, now)

@@ -23,7 +23,7 @@ func NewHandler(db *gorm.DB) *Handler {
 
 // POST /negociacoes/{id}/comentarios
 func (h *Handler) CriarComentario(w http.ResponseWriter, r *http.Request) {
-	// 1) Pega o ID da negociação da URL
+
 	idStr := mux.Vars(r)["id"]
 	negID, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -31,7 +31,6 @@ func (h *Handler) CriarComentario(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2) Decodifica payload mínimo
 	var dto struct {
 		Texto string `json:"texto"`
 	}
@@ -40,13 +39,11 @@ func (h *Handler) CriarComentario(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3) Monta o Comentario com o negociacao_id correto
 	c := Comentario{
 		Texto:        dto.Texto,
 		NegociacaoID: uint(negID),
 	}
 
-	// 4) Salva e retorna
 	if err := h.Repository.Criar(h.DB, &c); err != nil {
 		http.Error(w, "Erro ao criar comentário", http.StatusInternalServerError)
 		return
