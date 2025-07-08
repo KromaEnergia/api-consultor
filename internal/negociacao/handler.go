@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// AdicionarArquivosRequest representa o payload para adicionar arquivos
 type AdicionarArquivosRequest struct {
 	NovosArquivos []string `json:"novosArquivos"`
 }
@@ -31,25 +32,24 @@ func NewHandler(db *gorm.DB) *Handler {
 
 // negociacaoDTO é o payload de criação/atualização (sem ConsultorID)
 type negociacaoDTO struct {
-	Nome                string      `json:"nome"`
-	Contato             string      `json:"contato"`
-	Telefone            string      `json:"telefone"`
-	CNPJ                string      `json:"cnpj"`
-	Logo                string      `json:"logo"`
-	AnexoFatura         string      `json:"anexoFatura"`
-	AnexoEstudo         string      `json:"anexoEstudo"`
-	ContratoKC          string      `json:"contratoKC"`
-	AnexoContratoSocial string      `json:"anexoContratoSocial"`
-	Status              string      `json:"status"`
-	Produtos            string      `json:"produtos"`
-	KromaTake           bool        `json:"kromaTake"`
-	UF                  string      `json:"uf"`
-	Arquivos            StringSlice `gorm:"type:text" json:"arquivos,omitempty"`
+	Nome                string   `json:"nome"`
+	Contato             string   `json:"contato"`
+	Telefone            string   `json:"telefone"`
+	CNPJ                string   `json:"cnpj"`
+	Logo                string   `json:"logo"`
+	AnexoFatura         string   `json:"anexoFatura"`
+	AnexoEstudo         string   `json:"anexoEstudo"`
+	ContratoKC          string   `json:"contratoKC"`
+	AnexoContratoSocial string   `json:"anexoContratoSocial"`
+	Status              string   `json:"status"`
+	Produtos            []string `json:"produtos"`
+	KromaTake           bool     `json:"kromaTake"`
+	UF                  string   `json:"uf"`
+	Arquivos            []string `json:"arquivos"`
 }
 
 // Criar trata POST /negociacoes
 func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
-	// 1) Captura consultorID do JWT
 	userVal := r.Context().Value(auth.UsuarioIDKey)
 	if userVal == nil {
 		http.Error(w, "não autenticado", http.StatusUnauthorized)
@@ -57,14 +57,12 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	// 2) Decodifica DTO
 	var dto negociacaoDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
 
-	// 3) Monta o modelo
 	n := Negociacao{
 		Nome:                dto.Nome,
 		Contato:             dto.Contato,
@@ -83,13 +81,11 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 		Arquivos:            dto.Arquivos,
 	}
 
-	// 4) Persiste
 	if err := h.Repository.Salvar(h.DB, &n); err != nil {
 		http.Error(w, "Erro ao salvar negociação", http.StatusInternalServerError)
 		return
 	}
 
-	// 5) Retorna JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(n)
@@ -119,7 +115,6 @@ func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 
 // Atualizar trata PUT /negociacoes/{id}
 func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
-	// 1) ID da URL
 	idParam := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(idParam)
 	if err != nil {
@@ -127,7 +122,6 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2) Verifica autenticação e pega consultorID
 	userVal := r.Context().Value(auth.UsuarioIDKey)
 	if userVal == nil {
 		http.Error(w, "não autenticado", http.StatusUnauthorized)
@@ -135,21 +129,18 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	// 3) Busca registro existente
 	var existing Negociacao
 	if err := h.DB.First(&existing, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
 	}
 
-	// 4) Decodifica DTO
 	var dto negociacaoDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
 
-	// 5) Atualiza campos mutáveis
 	existing.Nome = dto.Nome
 	existing.Contato = dto.Contato
 	existing.Telefone = dto.Telefone
@@ -166,13 +157,11 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	existing.ConsultorID = consultorID
 	existing.Arquivos = dto.Arquivos
 
-	// 6) Persiste atualização
 	if err := h.Repository.Atualizar(h.DB, &existing); err != nil {
 		http.Error(w, "Erro ao atualizar negociação", http.StatusInternalServerError)
 		return
 	}
 
-	// 7) Retorna JSON
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(existing)
 }
@@ -187,17 +176,15 @@ func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Esta função adiciona novas URLs de arquivos ao slice 'Arquivos' de uma negociação existente.
+// AdicionarArquivos adiciona novas URLs ao slice 'Arquivos'
 func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
-	// 1. Pega o ID da negociação da URL.
 	idParam := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(idParam)
 	if err != nil {
-		http.Error(w, "ID da negociação inválido", http.StatusBadRequest)
+		http.Error(w, "ID inválido", http.StatusBadRequest)
 		return
 	}
 
-	// 2. Garante que o usuário está autenticado e pega seu ID.
 	userVal := r.Context().Value(auth.UsuarioIDKey)
 	if userVal == nil {
 		http.Error(w, "Não autenticado", http.StatusUnauthorized)
@@ -205,7 +192,6 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	// 3. Decodifica o payload com as novas URLs dos arquivos.
 	var req AdicionarArquivosRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
@@ -216,33 +202,129 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Busca a negociação existente no banco de dados.
-	var negociacaoExistente Negociacao
-	if err := h.DB.First(&negociacaoExistente, id).Error; err != nil {
+	var existente Negociacao
+	if err := h.DB.First(&existente, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
 	}
 
-	// 5. ✅ VERIFICAÇÃO DE SEGURANÇA:
-	// Garante que o consultor logado é o "dono" desta negociação.
 	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
-	if !isAdmin && negociacaoExistente.ConsultorID != consultorID {
-		http.Error(w, "Acesso negado: você não tem permissão para modificar esta negociação", http.StatusForbidden)
+	if !isAdmin && existente.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
 		return
 	}
 
-	// 6. Adiciona os novos arquivos ao slice existente.
-	// A função 'append' do Go lida com isso de forma eficiente.
-	negociacaoExistente.Arquivos = append(negociacaoExistente.Arquivos, req.NovosArquivos...)
-
-	// 7. Salva a negociação atualizada no banco.
-	if err := h.Repository.Atualizar(h.DB, &negociacaoExistente); err != nil {
+	existente.Arquivos = append(existente.Arquivos, req.NovosArquivos...)
+	if err := h.Repository.Atualizar(h.DB, &existente); err != nil {
 		http.Error(w, "Erro ao salvar os novos arquivos", http.StatusInternalServerError)
 		return
 	}
 
-	// 8. Retorna a negociação completa e atualizada.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(negociacaoExistente)
+	json.NewEncoder(w).Encode(existente)
 }
+
+// RemoverProduto trata DELETE /negociacoes/{id}/produtos/{idx}
+func (h *Handler) RemoverProduto(w http.ResponseWriter, r *http.Request) {
+	idParam := mux.Vars(r)["id"]
+	idxParam := mux.Vars(r)["idx"]
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+	idx, err := strconv.Atoi(idxParam)
+	if err != nil {
+		http.Error(w, "Índice inválido", http.StatusBadRequest)
+		return
+	}
+
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "Não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+
+	var existente Negociacao
+	if err := h.DB.First(&existente, id).Error; err != nil {
+		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	if !isAdmin && existente.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
+	if idx < 0 || idx >= len(existente.Produtos) {
+		http.Error(w, "Índice de produto inválido", http.StatusBadRequest)
+		return
+	}
+
+	existente.Produtos = append(existente.Produtos[:idx], existente.Produtos[idx+1:]...)
+	if err := h.Repository.Atualizar(h.DB, &existente); err != nil {
+		http.Error(w, "Erro ao remover produto", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(existente)
+}
+
+// RemoverArquivo trata DELETE /negociacoes/{id}/arquivos/{idx}
+func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
+	idParam := mux.Vars(r)["id"]
+	idxParam := mux.Vars(r)["idx"]
+	id, err := strconv.Atoi(idParam)
+	if err != nil {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
+	idx, err := strconv.Atoi(idxParam)
+	if err != nil {
+		http.Error(w, "Índice inválido", http.StatusBadRequest)
+		return
+	}
+
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "Não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+
+	var existente Negociacao
+	if err := h.DB.First(&existente, id).Error; err != nil {
+		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	if !isAdmin && existente.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
+	if idx < 0 || idx >= len(existente.Arquivos) {
+		http.Error(w, "Índice de arquivo inválido", http.StatusBadRequest)
+		return
+	}
+
+	existente.Arquivos = append(existente.Arquivos[:idx], existente.Arquivos[idx+1:]...)
+	if err := h.Repository.Atualizar(h.DB, &existente); err != nil {
+		http.Error(w, "Erro ao remover arquivo", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(existente)
+}
+
+/*
+Rotas sugeridas:
+router.HandleFunc("/negociacoes/{id}/produtos/{idx}", handler.RemoverProduto).Methods("DELETE")
+router.HandleFunc("/negociacoes/{id}/arquivos/{idx}", handler.RemoverArquivo).Methods("DELETE")
+*/

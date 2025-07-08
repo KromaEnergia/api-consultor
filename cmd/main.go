@@ -46,16 +46,16 @@ func main() {
 		log.Fatal("Erro ao conectar no banco: ", err)
 	}
 
-	// Dropar todas as tabelas existentes e recriar (ambiente de desenvolvimento)
-	if err := db.Migrator().DropTable(
-		&contrato.Contrato{},
-		&comentario.Comentario{},
-		&negociacao.Negociacao{},
-		&comercial.Comercial{},
-		&consultor.Consultor{},
-	); err != nil {
-		log.Fatal("Erro ao dropar tabelas: ", err)
-	}
+	// // Dropar todas as tabelas existentes e recriar (ambiente de desenvolvimento)
+	// if err := db.Migrator().DropTable(
+	// 	&contrato.Contrato{},
+	// 	&comentario.Comentario{},
+	// 	&negociacao.Negociacao{},
+	// 	&comercial.Comercial{},
+	// 	&consultor.Consultor{},
+	// ); err != nil {
+	// 	log.Fatal("Erro ao dropar tabelas: ", err)
+	// }
 
 	// AutoMigrate modelos após reset
 	if err := db.AutoMigrate(
@@ -112,7 +112,8 @@ func main() {
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Atualizar).Methods("PUT")
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Deletar).Methods("DELETE")
 	authRoutes.HandleFunc("/negociacoes/{id:[0-9]+}/arquivos", negHandler.AdicionarArquivos).Methods("POST")
-
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos/{idx}", negHandler.RemoverProduto).Methods("DELETE")
+	authRoutes.HandleFunc("/negociacoes/{id}/arquivos/{idx}", negHandler.RemoverArquivo).Methods("DELETE")
 	// Rotas de Contrato
 	contratoHandler := contrato.NewHandler(db)
 	authRoutes.HandleFunc("/negociacoes/{id}/contrato", contratoHandler.CriarParaNegociacao).Methods("POST")

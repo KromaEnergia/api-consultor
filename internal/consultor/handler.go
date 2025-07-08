@@ -46,11 +46,12 @@ type createConsultorRequest struct {
 	Email           string     `json:"email"`
 	Telefone        string     `json:"telefone"`
 	Foto            string     `json:"foto"`
+	TermoDeParceria string     `json:"termoDeParceria"`
+	DataNascimento  CustomDate `json:"dataNascimento"`
+	Estado          string     `json:"estado"`
 	Senha           string     `json:"senha"`
 	IsAdmin         bool       `json:"isAdmin"`
-	TermoDeParceria string     `json:"termoDeParceria,omitempty"`
-	DataNascimento  CustomDate `json:"dataNascimento,omitempty"`
-	Estado          string     `json:"estado,omitempty"`
+	ComercialID     uint       `json:"comercial_id"` // ← aqui
 }
 
 // Handler encapsula DB e repo
@@ -64,7 +65,7 @@ func NewHandler(db *gorm.DB) *Handler {
 	return &Handler{DB: db, Repository: NewRepository()}
 }
 
-// Login gera JWT
+// Login trata POST /login e retorna um JWT
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -78,7 +79,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Comparar senha
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Senha), []byte(req.Password)); err != nil {
 		http.Error(w, "senha incorreta", http.StatusUnauthorized)
 		return
@@ -102,13 +102,20 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash bcrypt
+	// 1. Opcional: validar que ComercialID != 0
+	if req.ComercialID == 0 {
+		http.Error(w, "comercial_id é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Hash da senha
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Senha), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, "erro ao processar senha", http.StatusInternalServerError)
 		return
 	}
 
+	// 3. Preencher o struct incluindo o ComercialID
 	c := Consultor{
 		Nome:                  req.Nome,
 		Sobrenome:             req.Sobrenome,
@@ -116,12 +123,13 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		Email:                 req.Email,
 		Telefone:              req.Telefone,
 		Foto:                  req.Foto,
-		Senha:                 string(hash),
-		PrecisaRedefinirSenha: false,
-		IsAdmin:               req.IsAdmin,
 		TermoDeParceria:       req.TermoDeParceria,
 		DataNascimento:        req.DataNascimento,
 		Estado:                req.Estado,
+		Senha:                 string(hash),
+		PrecisaRedefinirSenha: false,
+		IsAdmin:               req.IsAdmin,
+		ComercialID:           req.ComercialID, // ← aqui
 	}
 
 	if err := h.Repository.Salvar(h.DB, &c); err != nil {
