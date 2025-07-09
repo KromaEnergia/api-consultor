@@ -75,5 +75,5 @@ type Consultor struct {
 	IsAdmin               bool                    `json:"isAdmin"`
 	ComercialID           uint                    `gorm:"not null" json:"comercial_id"`
 	Negociacoes           []negociacao.Negociacao `gorm:"foreignKey:ConsultorID" json:"negociacoes"`
-	Contratos             []contrato.Contrato     `gorm:"foreignKey:ConsultorID" json:"contratos"`
+	Contratos             []contrato.Contrato     `gorm:"foreignKey:NegociacaoID;constraint:OnDelete:CASCADE" json:"contratos"`
 }

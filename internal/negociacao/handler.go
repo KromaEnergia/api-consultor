@@ -74,7 +74,6 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 		ContratoKC:          dto.ContratoKC,
 		AnexoContratoSocial: dto.AnexoContratoSocial,
 		Status:              dto.Status,
-		Produtos:            dto.Produtos,
 		KromaTake:           dto.KromaTake,
 		UF:                  dto.UF,
 		ConsultorID:         consultorID,
@@ -151,7 +150,6 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	existing.ContratoKC = dto.ContratoKC
 	existing.AnexoContratoSocial = dto.AnexoContratoSocial
 	existing.Status = dto.Status
-	existing.Produtos = dto.Produtos
 	existing.KromaTake = dto.KromaTake
 	existing.UF = dto.UF
 	existing.ConsultorID = consultorID

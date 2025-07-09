@@ -22,27 +22,35 @@ func NewHandler(db *gorm.DB) *Handler {
 
 // DTO para criação/atualização
 type contratoDTO struct {
+	Tipo             string    `json:"tipo"`
+	URL              string    `json:"url"`
+	DataAssinatura   time.Time `json:"dataAssinatura"`
 	Valor            float64   `json:"valor"`
 	InicioSuprimento time.Time `json:"inicioSuprimento"`
 	FimSuprimento    time.Time `json:"fimSuprimento"`
 	ValorIntegral    bool      `json:"valorIntegral"`
 	Status           string    `json:"status"`
-	Fee              bool      `json:"fee"`
-	FeePercent       float64   `json:"feePercent"`
-	UniPay           bool      `json:"unipay"`
-	UniPayPercent    float64   `json:"unipayPercent"`
-	MonPay           bool      `json:"monPay"`
-	MonthPay         float64   `json:"monthPay"`
+
+	Fee        bool    `json:"fee"`
+	FeePercent float64 `json:"feePercent"`
+
+	UniPay        bool    `json:"unipay"`
+	UniPayPercent float64 `json:"unipayPercent"`
+
+	MonPay   bool    `json:"monPay"`
+	MonthPay float64 `json:"monthPay"`
 }
 
 // CriarParaNegociacao insere um novo contrato
 func (h *Handler) CriarParaNegociacao(w http.ResponseWriter, r *http.Request) {
+	// 1. Extrai ID da negociação da URL
 	negID, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "ID de negociação inválido", http.StatusBadRequest)
 		return
 	}
 
+	// 2. Busca consultorID associado à negociação
 	var neg struct{ ConsultorID uint }
 	if err := h.DB.Table("negociacaos").
 		Select("consultor_id").
@@ -52,33 +60,44 @@ func (h *Handler) CriarParaNegociacao(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 3. Decodifica JSON para DTO
 	var dto contratoDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
 
+	// 4. Mapeia DTO para model
 	c := Contrato{
 		NegociacaoID:     uint(negID),
 		ConsultorID:      neg.ConsultorID,
+		Tipo:             dto.Tipo,
+		URL:              dto.URL,
+		DataAssinatura:   dto.DataAssinatura,
 		Valor:            dto.Valor,
 		InicioSuprimento: dto.InicioSuprimento,
 		FimSuprimento:    dto.FimSuprimento,
 		ValorIntegral:    dto.ValorIntegral,
 		Status:           dto.Status,
-		Fee:              dto.Fee,
-		FeePercent:       dto.FeePercent,
-		UniPay:           dto.UniPay,
-		UniPayPercent:    dto.UniPayPercent,
-		MonPay:           dto.MonPay,
-		MonthPay:         dto.MonthPay,
+
+		Fee:        dto.Fee,
+		FeePercent: dto.FeePercent,
+
+		UniPay:        dto.UniPay,
+		UniPayPercent: dto.UniPayPercent,
+
+		MonPay:   dto.MonPay,
+		MonthPay: dto.MonthPay,
 	}
 
+	// 5. Persiste no banco
 	if err := h.Repository.Salvar(h.DB, &c); err != nil {
 		http.Error(w, "Erro ao salvar contrato", http.StatusInternalServerError)
 		return
 	}
 
+	// 6. Retorna o contrato criado
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(c)
 }

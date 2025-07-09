@@ -1,5 +1,5 @@
-// internal/produto/handler.go
-package produto
+// internal/produtos/handler.go
+package produtos
 
 import (
 	"encoding/json"

@@ -14,7 +14,7 @@ import (
 	"github.com/KromaEnergia/api-consultor/internal/consultor"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
-
+	"github.com/KromaEnergia/api-consultor/internal/produtos"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"gorm.io/driver/postgres"
@@ -46,33 +46,27 @@ func main() {
 		log.Fatal("Erro ao conectar no banco: ", err)
 	}
 
-	// // Dropar todas as tabelas existentes e recriar (ambiente de desenvolvimento)
-	// if err := db.Migrator().DropTable(
-	// 	&contrato.Contrato{},
-	// 	&comentario.Comentario{},
-	// 	&negociacao.Negociacao{},
-	// 	&comercial.Comercial{},
-	// 	&consultor.Consultor{},
-	// ); err != nil {
-	// 	log.Fatal("Erro ao dropar tabelas: ", err)
-	// }
-
-	// AutoMigrate modelos após reset
+	// AutoMigrate modelos
 	if err := db.AutoMigrate(
 		&consultor.Consultor{},
 		&comercial.Comercial{},
 		&negociacao.Negociacao{},
 		&comentario.Comentario{},
 		&contrato.Contrato{},
+		&produtos.Produto{}, // <<< adiciona a tabela produtos
 	); err != nil {
 		log.Fatal("Erro no AutoMigrate: ", err)
 	}
+
+	// Instancia repositórios e handlers
+	prodRepo := produtos.NewRepository(db)
+	prodHandler := produtos.NewHandler(prodRepo)
 
 	r := mux.NewRouter()
 
 	// Handlers de Consultor
 	consultorHandler := consultor.NewHandler(db)
-	r.HandleFunc("/login", consultorHandler.Login).Methods("POST")
+	r.HandleFunc("/consultores/login", consultorHandler.Login).Methods("POST")
 	r.HandleFunc("/consultores", consultorHandler.CriarConsultor).Methods("POST")
 
 	// Handlers de Comercial
@@ -84,26 +78,42 @@ func main() {
 	authRoutes := r.NewRoute().Subrouter()
 	authRoutes.Use(auth.MiddlewareAutenticacao)
 
-	// Rotas protegidas de Consultor
-	authRoutes.HandleFunc("/consultores", consultorHandler.ListarConsultores).Methods("GET")
-	authRoutes.HandleFunc("/consultores/me", consultorHandler.Me).Methods("GET")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.BuscarPorID).Methods("GET")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.AtualizarConsultor).Methods("PUT")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}", consultorHandler.DeletarConsultor).Methods("DELETE")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/resumo", consultorHandler.ObterResumoConsultor).Methods("GET")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/solicitar-cnpj", consultorHandler.SolicitarAlteracaoCNPJ).Methods("PUT")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/gerenciar-cnpj", consultorHandler.GerenciarAlteracaoCNPJ).Methods("POST")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/termo-parceria", consultorHandler.AtualizarTermoDeParceria).Methods("PUT")
-	authRoutes.HandleFunc("/consultores/me", consultorHandler.AtualizarMeuPerfil).Methods("PUT")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/solicitar-email", consultorHandler.SolicitarAlteracaoEmail).Methods("PUT")
-	authRoutes.HandleFunc("/consultores/{id:[0-9]+}/gerenciar-email", consultorHandler.GerenciarAlteracaoEmail).Methods("POST")
+	// sub‐router apenas para /consultores
+	consultorRoutes := r.PathPrefix("/consultores").Subrouter()
+	consultorRoutes.Use(auth.MiddlewareAutenticacao)
 
-	// Rotas protegidas de Comercial
+	// GET /consultores/me
+	consultorRoutes.HandleFunc("/me", consultorHandler.Me).Methods("GET")
+	// GET /consultores           (lista todos ou só o próprio, dependendo de admin)
+	consultorRoutes.HandleFunc("", consultorHandler.ListarConsultores).Methods("GET")
+	// GET /consultores/{id}
+	consultorRoutes.HandleFunc("/{id:[0-9]+}", consultorHandler.BuscarPorID).Methods("GET")
+	// PUT /consultores/me        (atualiza o próprio perfil)
+	consultorRoutes.HandleFunc("/me", consultorHandler.AtualizarMeuPerfil).Methods("PUT")
+	// PUT /consultores/{id}
+	consultorRoutes.HandleFunc("/{id:[0-9]+}", consultorHandler.AtualizarConsultor).Methods("PUT")
+	// DELETE /consultores/{id}
+	consultorRoutes.HandleFunc("/{id:[0-9]+}", consultorHandler.DeletarConsultor).Methods("DELETE")
+	// GET /consultores/{id}/resumo
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/resumo", consultorHandler.ObterResumoConsultor).Methods("GET")
+	// PUT /consultores/{id}/solicitar-cnpj
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/solicitar-cnpj", consultorHandler.SolicitarAlteracaoCNPJ).Methods("PUT")
+	// POST /consultores/{id}/gerenciar-cnpj
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/gerenciar-cnpj", consultorHandler.GerenciarAlteracaoCNPJ).Methods("POST")
+	// PUT /consultores/{id}/termo-parceria
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/termo-parceria", consultorHandler.AtualizarTermoDeParceria).Methods("PUT")
+	// PUT /consultores/{id}/solicitar-email
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/solicitar-email", consultorHandler.SolicitarAlteracaoEmail).Methods("PUT")
+	// POST /consultores/{id}/gerenciar-email
+	consultorRoutes.HandleFunc("/{id:[0-9]+}/gerenciar-email", consultorHandler.GerenciarAlteracaoEmail).Methods("POST")
+
+	// Rotas de Comercial
 	authRoutes.HandleFunc("/comerciais", comercialHandler.List).Methods("GET")
 	authRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.GetByID).Methods("GET")
 	authRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.Update).Methods("PUT")
 	authRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.Delete).Methods("DELETE")
 	authRoutes.HandleFunc("/comerciais/me", comercialHandler.Me).Methods("GET")
+
 	// Rotas de Negociação
 	negHandler := negociacao.NewHandler(db)
 	authRoutes.HandleFunc("/negociacoes", negHandler.Criar).Methods("POST")
@@ -111,9 +121,16 @@ func main() {
 	authRoutes.HandleFunc("/consultores/{id}/negociacoes", negHandler.ListarPorConsultor).Methods("GET")
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Atualizar).Methods("PUT")
 	authRoutes.HandleFunc("/negociacoes/{id}", negHandler.Deletar).Methods("DELETE")
-	authRoutes.HandleFunc("/negociacoes/{id:[0-9]+}/arquivos", negHandler.AdicionarArquivos).Methods("POST")
-	authRoutes.HandleFunc("/negociacoes/{id}/produtos/{idx}", negHandler.RemoverProduto).Methods("DELETE")
+	authRoutes.HandleFunc("/negociacoes/{id}/arquivos", negHandler.AdicionarArquivos).Methods("POST")
 	authRoutes.HandleFunc("/negociacoes/{id}/arquivos/{idx}", negHandler.RemoverArquivo).Methods("DELETE")
+
+	// Rotas de Produtos
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos", prodHandler.CreateProdutos).Methods("POST")
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos", prodHandler.ListProdutos).Methods("GET")
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos/{pid}", prodHandler.GetProduto).Methods("GET")
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos/{pid}", prodHandler.UpdateProduto).Methods("PUT")
+	authRoutes.HandleFunc("/negociacoes/{id}/produtos/{pid}", prodHandler.DeleteProduto).Methods("DELETE")
+
 	// Rotas de Contrato
 	contratoHandler := contrato.NewHandler(db)
 	authRoutes.HandleFunc("/negociacoes/{id}/contrato", contratoHandler.CriarParaNegociacao).Methods("POST")
@@ -140,6 +157,7 @@ func main() {
 		AllowCredentials: false,
 	})
 	handler := c.Handler(r)
+
 	fmt.Println("Servidor rodando em http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }

@@ -5,7 +5,9 @@ import (
 
 	"github.com/KromaEnergia/api-consultor/internal/comentario"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
-	"github.com/KromaEnergia/api-consultor/internal/produto"
+
+	// "github.com/KromaEnergia/api-consultor/internal/contrato"
+	produto "github.com/KromaEnergia/api-consultor/internal/produtos"
 	"gorm.io/gorm"
 )
 
@@ -29,8 +31,8 @@ type Negociacao struct {
 	// Suporta múltiplos anexos de arquivos em JSONB
 	Arquivos []string `gorm:"type:jsonb;serializer:json" json:"arquivos"`
 
-	Status string `json:"status"`
-
+	Status    string              `json:"status"`
+	Contratos []contrato.Contrato `gorm:"foreignKey:NegociacaoID;constraint:OnDelete:CASCADE" json:"contratos"`
 	// --- Aqui entra Produtos ---
 	// Suporta múltiplos produtos em JSONB via relação 1-N
 	Produtos []produto.Produto `gorm:"foreignKey:NegociacaoID" json:"produtos"`
@@ -40,7 +42,7 @@ type Negociacao struct {
 	ConsultorID uint   `json:"consultorId"`
 
 	// Relação 1-1 com Contrato
-	Contrato contrato.Contrato `gorm:"foreignKey:NegociacaoID" json:"contrato"`
+
 	// Relação 1-N com Comentarios
 	Comentarios []comentario.Comentario `gorm:"foreignKey:NegociacaoID" json:"comentarios"`
 }

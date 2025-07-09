@@ -8,6 +8,7 @@ import (
 	"github.com/KromaEnergia/api-consultor/internal/auth"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
+	"github.com/KromaEnergia/api-consultor/internal/produtos"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -26,7 +27,6 @@ type AprovarCNPJRequest struct {
 type AtualizarTermoRequest struct {
 	URL string `json:"url"`
 }
-
 type LoginRequest struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
@@ -65,7 +65,7 @@ func NewHandler(db *gorm.DB) *Handler {
 	return &Handler{DB: db, Repository: NewRepository()}
 }
 
-// Login trata POST /login e retorna um JWT
+// Login gera JWT
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -73,12 +73,12 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Repository.BuscarPorEmailOuCNPJ(h.DB, req.Login)
+	// usa req.Login (que já contém o e-mail vindo do JSON)
+	user, err := h.Repository.BuscarPorEmail(h.DB, req.Login)
 	if err != nil {
 		http.Error(w, "credenciais inválidas", http.StatusUnauthorized)
 		return
 	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Senha), []byte(req.Password)); err != nil {
 		http.Error(w, "senha incorreta", http.StatusUnauthorized)
 		return
@@ -265,8 +265,11 @@ func (h *Handler) ObterResumoConsultor(w http.ResponseWriter, r *http.Request) {
 
 	negociacoes, _ := negociacao.NewRepository().ListarPorConsultor(h.DB, consultorObj.ID)
 	contratos, _ := contrato.NewRepository().ListarPorConsultor(h.DB, consultorObj.ID)
-	dto := MontarResumoConsultorDTO(*consultorObj, contratos, negociacoes)
+	prodRepo := produtos.NewRepository(h.DB)
+	produtosList, err := prodRepo.ListarPorConsultor(consultorObj.ID)
+	dto := MontarResumoConsultorDTO(*consultorObj, contratos, negociacoes, produtosList)
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(dto)
 }
 
@@ -279,6 +282,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.
 		Preload("Negociacoes").
 		Preload("Contratos").
+		Preload("Negociacoes.Produtos").
+		Preload("Negociacoes.Comentarios").
 		First(&c, userID).Error; err != nil {
 		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
 		return

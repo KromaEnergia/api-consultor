@@ -1,5 +1,5 @@
-// internal/produto/model.go
-package produto
+// internal/produtos/model.go
+package produtos
 
 import "gorm.io/gorm"
 

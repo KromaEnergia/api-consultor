@@ -6,11 +6,12 @@ import (
 
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
+	"github.com/KromaEnergia/api-consultor/internal/produtos"
 	"gorm.io/gorm"
 )
 
 type Repository interface {
-	BuscarPorEmailOuCNPJ(db *gorm.DB, valor string) (*Consultor, error)
+	BuscarPorEmail(db *gorm.DB, valor string) (*Consultor, error)
 	Salvar(db *gorm.DB, c *Consultor) error
 	BuscarPorID(db *gorm.DB, id uint) (*Consultor, error)
 	ListarTodos(db *gorm.DB) ([]Consultor, error)
@@ -23,19 +24,13 @@ type repositoryImpl struct{}
 func NewRepository() Repository {
 	return &repositoryImpl{}
 }
-
-// Busca primeiro por e-mail, depois por CNPJ, para evitar ambiguidade
-func (r *repositoryImpl) BuscarPorEmailOuCNPJ(db *gorm.DB, valor string) (*Consultor, error) {
+func (r *repositoryImpl) BuscarPorEmail(db *gorm.DB, email string) (*Consultor, error) {
 	var c Consultor
-
-	if err := db.Where("email = ?", valor).First(&c).Error; err == nil {
-		return &c, nil
-	}
-	if err := db.Where("cnpj = ?", valor).First(&c).Error; err == nil {
-		return &c, nil
-	}
-
-	return nil, gorm.ErrRecordNotFound
+	err := db.
+		Where("email = ?", email).
+		First(&c).
+		Error
+	return &c, err
 }
 
 func (r *repositoryImpl) Salvar(db *gorm.DB, c *Consultor) error {
@@ -43,19 +38,23 @@ func (r *repositoryImpl) Salvar(db *gorm.DB, c *Consultor) error {
 }
 
 func (r *repositoryImpl) BuscarPorID(db *gorm.DB, id uint) (*Consultor, error) {
-	var consultor Consultor
-	err := db.Preload("Negociacoes.Contrato").
+	var c Consultor
+	err := db.
+		Preload("Negociacoes").
+		Preload("Negociacoes.Produtos").
 		Preload("Negociacoes.Comentarios").
-		Preload("Contratos").
-		First(&consultor, id).Error
-	return &consultor, err
+		Preload("Negociacoes.Contrato").
+		Preload("Negociacoes.contrato").
+		First(&c, id).Error
+	return &c, err
 }
 
 func (r *repositoryImpl) ListarTodos(db *gorm.DB) ([]Consultor, error) {
 	var consultores []Consultor
 	err := db.Preload("Negociacoes.Contrato").
 		Preload("Negociacoes.Comentarios").
-		Preload("Contratos").
+		Preload("Contrato").
+		Preload("Negociacoes.contrato").
 		Find(&consultores).Error
 	return consultores, err
 }
@@ -85,10 +84,12 @@ func MontarResumoConsultorDTO(
 	consultor Consultor,
 	contratos []contrato.Contrato,
 	negociacoes []negociacao.Negociacao,
+	produtos []produtos.Produto, // ← novo parâmetro
 ) ResumoConsultorDTO {
 	var recebida, aReceber float64
 	now := time.Now()
 
+	// cálculo de comissões…
 	for _, c := range contratos {
 		if c.ValorIntegral {
 			if !now.Before(c.InicioSuprimento) {
@@ -105,12 +106,19 @@ func MontarResumoConsultorDTO(
 		}
 	}
 
+	// conta negociações ativas…
 	ativas := 0
 	for _, n := range negociacoes {
 		statusLower := strings.ToLower(strings.TrimSpace(n.Status))
 		if statusLower == "negociação ativa" || statusLower == "ativa" {
 			ativas++
 		}
+	}
+
+	// extrai apenas o tipo de cada produto
+	tipos := make([]string, len(produtos))
+	for i, p := range produtos {
+		tipos[i] = p.Tipo
 	}
 
 	return ResumoConsultorDTO{
@@ -125,5 +133,7 @@ func MontarResumoConsultorDTO(
 		NegociacoesAtivas: ativas,
 		ComissaoRecebida:  recebida,
 		ComissaoAReceber:  aReceber,
+
+		Produtos: tipos, // preenche o novo campo
 	}
 }

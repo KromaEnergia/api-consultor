@@ -26,6 +26,7 @@ func (r *repositoryImpl) ListarPorConsultor(db *gorm.DB, consultorID uint) ([]Ne
 	var list []Negociacao
 	err := db.
 		Where("consultor_id = ?", consultorID).
+		Preload("Produtos").
 		Preload("Contrato").
 		Preload("Comentarios").
 		Find(&list).Error
@@ -35,7 +36,9 @@ func (r *repositoryImpl) ListarPorConsultor(db *gorm.DB, consultorID uint) ([]Ne
 func (r *repositoryImpl) BuscarPorID(db *gorm.DB, id uint) (*Negociacao, error) {
 	var n Negociacao
 	err := db.
+		Preload("Produtos").
 		Preload("Contrato").
+		Preload("Produtos").
 		Preload("Comentarios").
 		First(&n, id).Error
 	return &n, err
