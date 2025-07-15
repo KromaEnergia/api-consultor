@@ -55,6 +55,7 @@ func (r *repositoryImpl) ListarTodos(db *gorm.DB) ([]Consultor, error) {
 		Preload("Negociacoes.Comentarios").
 		Preload("Contrato").
 		Preload("Negociacoes.contrato").
+		Preload("Negociacoes.CalculoComissao").
 		Find(&consultores).Error
 	return consultores, err
 }

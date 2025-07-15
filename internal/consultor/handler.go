@@ -16,6 +16,18 @@ import (
 
 // DTOs
 
+// ResumoComissoes agrupa valores de energia e gestão por status
+type ResumoComissoes struct {
+	ComissoesRecebidas struct {
+		Energia float64 `json:"energiaRecebida"`
+		Gestao  float64 `json:"gestaoRecebida"`
+	} `json:"comissoesRecebidas"`
+	ComissoesAReceber struct {
+		Energia float64 `json:"energiaAReceber"`
+		Gestao  float64 `json:"gestaoAReceber"`
+	} `json:"comissoesAReceber"`
+}
+
 type SolicitacaoCNPJRequest struct {
 	NovoCNPJ string `json:"novoCnpj"`
 }
@@ -58,6 +70,16 @@ type createConsultorRequest struct {
 type Handler struct {
 	DB         *gorm.DB
 	Repository Repository
+}
+
+// ComissoesHandler trata a rota de resumo de comissões
+type ComissoesHandler struct {
+	DB *gorm.DB
+}
+
+// NewComissoesHandler cria um handler para comissões
+func NewComissoesHandler(db *gorm.DB) *ComissoesHandler {
+	return &ComissoesHandler{DB: db}
 }
 
 // NewHandler cria Handler
@@ -284,6 +306,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		Preload("Contratos").
 		Preload("Negociacoes.Produtos").
 		Preload("Negociacoes.Comentarios").
+		Preload("Negociacoes.CalculosComissao").
+		Preload("Negociacoes.CalculosComissao.Parcelas").
 		First(&c, userID).Error; err != nil {
 		http.Error(w, "Consultor não encontrado", http.StatusNotFound)
 		return
@@ -578,4 +602,35 @@ func (h *Handler) GerenciarAlteracaoEmail(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail gerenciada com sucesso."})
+}
+
+// GetResumo trata GET /consultores/comissoes usando o usuário autenticado
+func (h *ComissoesHandler) GetResumo(w http.ResponseWriter, r *http.Request) {
+	// Extrai ID do consultor do contexto (do JWT)
+	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+
+	var res ResumoComissoes
+
+	// Total recebido (status Pago) para negociações fechadas
+	h.DB.Table("parcela_comissaos").
+		Select(
+			"SUM(calculo_comissaos.energia_mensal) AS energia_recebida, "+
+				"SUM(calculo_comissaos.valor_gestao_mensal) AS gestao_recebida").
+		Joins("JOIN calculo_comissaos ON calculo_comissaos.id = parcela_comissaos.calculo_comissao_id").
+		Joins("JOIN negociacoes ON negociacoes.id = calculo_comissaos.negociacao_id").
+		Where("negociacoes.consultor_id = ? AND negociacoes.status = ? AND parcela_comissaos.status = ?", userID, "Fechada", "Pago").
+		Scan(&res.ComissoesRecebidas)
+
+	// Total a receber (Pendente ou Atrasado)
+	h.DB.Table("parcela_comissaos").
+		Select(
+			"SUM(calculo_comissaos.energia_mensal) AS energia_a_receber, "+
+				"SUM(calculo_comissaos.valor_gestao_mensal) AS gestao_a_receber").
+		Joins("JOIN calculo_comissaos ON calculo_comissaos.id = parcela_comissaos.calculo_comissao_id").
+		Joins("JOIN negociacoes ON negociacoes.id = calculo_comissaos.negociacao_id").
+		Where("negociacoes.consultor_id = ? AND negociacoes.status = ? AND parcela_comissaos.status IN ?", userID, "Fechada", []string{"Pendente", "Atrasado"}).
+		Scan(&res.ComissoesAReceber)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }

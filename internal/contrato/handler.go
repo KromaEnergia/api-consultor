@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/KromaEnergia/api-consultor/internal/auth"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 )
@@ -178,111 +177,4 @@ func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) Comissoes(w http.ResponseWriter, r *http.Request) {
-	type ComissaoTotal struct {
-		ComissoesRecebidas float64 `json:"comissoesRecebidas"`
-		ComissoesAReceber  float64 `json:"comissoesAReceber"`
-	}
-
-	// 1) Pega o ID do consultor autenticado
-	userIDVal := r.Context().Value(auth.UsuarioIDKey)
-	if userIDVal == nil {
-		http.Error(w, "não autenticado", http.StatusUnauthorized)
-		return
-	}
-	consultorID := userIDVal.(uint)
-
-	// 2) Busca apenas contratos deste consultor
-	//    **e** cujas negociações correspondentes tenham status = "Contrato Fechado"
-	var contratos []Contrato
-	if err := h.DB.
-		Joins("JOIN negociacaos n ON n.id = contratos.negociacao_id").
-		Where("contratos.consultor_id = ? AND n.status = ?", consultorID, "Contrato Fechado").
-		Find(&contratos).Error; err != nil {
-		http.Error(w, "Erro ao buscar contratos", http.StatusInternalServerError)
-		return
-	}
-
-	// 3) Se não vier nada, logo não há comissões a somar
-	if len(contratos) == 0 {
-		resp := ComissaoTotal{ComissoesRecebidas: 0, ComissoesAReceber: 0}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	now := time.Now()
-	var totalRec, totalARec float64
-
-	// função auxiliar para meses inclusivos
-	monthsBetween := func(start, end time.Time) int {
-		y1, m1, _ := start.Date()
-		y2, m2, _ := end.Date()
-		diff := int((y2-y1)*12 + int(m2-m1))
-		return diff + 1
-	}
-
-	for _, c := range contratos {
-		// FEE: dividido em 2 parcelas, início e fim
-		if c.Fee {
-			feeTotal := c.Valor * c.FeePercent
-			half := feeTotal / 2
-			// primeira metade no mês de início
-			if now.After(c.InicioSuprimento) || now.Equal(c.InicioSuprimento) {
-				totalRec += half
-			} else {
-				totalARec += half
-			}
-			// segunda metade no mês de fim
-			if now.After(c.FimSuprimento) || now.Equal(c.FimSuprimento) {
-				totalRec += half
-			} else {
-				totalARec += half
-			}
-		}
-
-		// UniPay (único pagamento)
-		if c.UniPay {
-			val := c.Valor * c.UniPayPercent
-			if now.After(c.InicioSuprimento) || now.Equal(c.InicioSuprimento) {
-				totalRec += val
-			} else {
-				totalARec += val
-			}
-		}
-
-		// MonPay (mensal)
-		if c.MonPay {
-			months := monthsBetween(c.InicioSuprimento, c.FimSuprimento)
-			if months <= 0 {
-				months = 1
-			}
-			totalValue := c.Valor
-
-			switch {
-			case now.Before(c.InicioSuprimento):
-				totalARec += totalValue
-			case now.After(c.FimSuprimento) || now.Equal(c.FimSuprimento):
-				totalRec += totalValue
-			default:
-				elapsed := monthsBetween(c.InicioSuprimento, now)
-				if elapsed > months {
-					elapsed = months
-				}
-				monthly := totalValue / float64(months)
-				rec := monthly * float64(elapsed)
-				totalRec += rec
-				totalARec += totalValue - rec
-			}
-		}
-	}
-
-	resp := ComissaoTotal{
-		ComissoesRecebidas: totalRec,
-		ComissoesAReceber:  totalARec,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }

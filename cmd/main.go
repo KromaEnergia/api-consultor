@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/KromaEnergia/api-consultor/internal/auth"
+	"github.com/KromaEnergia/api-consultor/internal/calculocomissao"
 	"github.com/KromaEnergia/api-consultor/internal/comentario"
 	"github.com/KromaEnergia/api-consultor/internal/comercial"
 	"github.com/KromaEnergia/api-consultor/internal/consultor"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
+	"github.com/KromaEnergia/api-consultor/internal/parcelacomissao"
 	"github.com/KromaEnergia/api-consultor/internal/produtos"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -53,15 +55,21 @@ func main() {
 		&negociacao.Negociacao{},
 		&comentario.Comentario{},
 		&contrato.Contrato{},
-		&produtos.Produto{}, // <<< adiciona a tabela produtos
+		&produtos.Produto{},
+		&calculocomissao.CalculoComissao{},
+		&parcelacomissao.ParcelaComissao{},
 	); err != nil {
 		log.Fatal("Erro no AutoMigrate: ", err)
 	}
 
 	// Instancia repositórios e handlers
+	comissoesHandler := consultor.NewComissoesHandler(db)
 	prodRepo := produtos.NewRepository(db)
 	prodHandler := produtos.NewHandler(prodRepo)
-
+	calcRepo := calculocomissao.NewRepository(db)
+	calcHandler := calculocomissao.NewHandler(calcRepo)
+	parcelasRepo := parcelacomissao.NewRepository(db)           // 3a. Repo
+	parcelasHandler := parcelacomissao.NewHandler(parcelasRepo) // 3b. Handler
 	r := mux.NewRouter()
 
 	// Handlers de Consultor
@@ -84,11 +92,11 @@ func main() {
 
 	// GET /consultores/me
 	consultorRoutes.HandleFunc("/me", consultorHandler.Me).Methods("GET")
-	// GET /consultores           (lista todos ou só o próprio, dependendo de admin)
+	// GET /consultores
 	consultorRoutes.HandleFunc("", consultorHandler.ListarConsultores).Methods("GET")
 	// GET /consultores/{id}
 	consultorRoutes.HandleFunc("/{id:[0-9]+}", consultorHandler.BuscarPorID).Methods("GET")
-	// PUT /consultores/me        (atualiza o próprio perfil)
+	// PUT /consultores/me
 	consultorRoutes.HandleFunc("/me", consultorHandler.AtualizarMeuPerfil).Methods("PUT")
 	// PUT /consultores/{id}
 	consultorRoutes.HandleFunc("/{id:[0-9]+}", consultorHandler.AtualizarConsultor).Methods("PUT")
@@ -138,7 +146,6 @@ func main() {
 	authRoutes.HandleFunc("/consultores/{id}/contratos", contratoHandler.ListarPorConsultor).Methods("GET")
 	authRoutes.HandleFunc("/contratos/{id}", contratoHandler.Atualizar).Methods("PUT")
 	authRoutes.HandleFunc("/contratos/{id}", contratoHandler.Deletar).Methods("DELETE")
-	authRoutes.HandleFunc("/comissoes", contratoHandler.Comissoes).Methods("GET")
 
 	// Rotas de Comentários
 	comentHandler := comentario.NewHandler(db)
@@ -148,10 +155,27 @@ func main() {
 	authRoutes.HandleFunc("/comentarios/{id}", comentHandler.Atualizar).Methods("PUT")
 	authRoutes.HandleFunc("/comentarios/{id}", comentHandler.RemoverComentario).Methods("DELETE")
 
+	// Rotas de Cálculo de Comissão
+	// O calcHandler já foi inicializado acima, não precisa de "calcRepo = ..." aqui.
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao", calcHandler.Create).Methods("POST")
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao", calcHandler.List).Methods("GET")
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao/{cid}", calcHandler.Get).Methods("GET")
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao/{cid}", calcHandler.Update).Methods("PUT")
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao/{cid}", calcHandler.Delete).Methods("DELETE")
+	// <<<---- NOVA ROTA PATCH PARA ATUALIZAR STATUS ---->>>
+	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao/{cid}/status", calcHandler.UpdateStatus).Methods("PATCH")
+
+	// <<<---- NOVA ROTA PATCH PARA ATUALIZAR Parcela ---->>>
+	authRoutes.HandleFunc("/calculos-comissao/{cid}/parcelas", parcelasHandler.List).Methods("GET")
+	// PATCH /parcelas/{pid}/status
+	authRoutes.HandleFunc("/parcelas/{pid}/status", parcelasHandler.UpdateStatus).Methods("PATCH")
+
+	consultorRoutes.HandleFunc("/comissoes", comissoesHandler.GetResumo).Methods("GET")
+
 	// CORS
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"}, // Adicionado PATCH
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Authorization"},
 		AllowCredentials: false,

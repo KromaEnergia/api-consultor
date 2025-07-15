@@ -3,6 +3,7 @@ package negociacao
 import (
 	"time"
 
+	"github.com/KromaEnergia/api-consultor/internal/calculocomissao"
 	"github.com/KromaEnergia/api-consultor/internal/comentario"
 	"github.com/KromaEnergia/api-consultor/internal/contrato"
 
@@ -45,4 +46,6 @@ type Negociacao struct {
 
 	// Relação 1-N com Comentarios
 	Comentarios []comentario.Comentario `gorm:"foreignKey:NegociacaoID" json:"comentarios"`
+
+	CalculosComissao []calculocomissao.CalculoComissao `gorm:"foreignKey:NegociacaoID;constraint:OnDelete:CASCADE" json:"calculosComissao"`
 }
