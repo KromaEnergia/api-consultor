@@ -172,9 +172,17 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
 
 	var c Comercial
-	// Carrega também o slice de Consultores associados
+	// Carrega também o slice de Consultores e suas relações (Negociações, Contratos)
 	if err := h.DB.
-		Preload("Consultores").
+		Preload("Consultores", func(db *gorm.DB) *gorm.DB {
+			return db.
+				Preload("Negociacoes").
+				Preload("Contratos").
+				Preload("Negociacoes.Contratos").
+				Preload("Negociacoes.Produtos").
+				Preload("Negociacoes.CalculosComissao").
+				Preload("Negociacoes.CalculosComissao.Parcelas")
+		}).
 		First(&c, userID).Error; err != nil {
 		http.Error(w, "Comercial não encontrado", http.StatusNotFound)
 		return

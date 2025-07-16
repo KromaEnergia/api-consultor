@@ -33,13 +33,29 @@ func (r *repositoryImpl) Save(db *gorm.DB, c *Comercial) error {
 
 func (r *repositoryImpl) ListAll(db *gorm.DB) ([]Comercial, error) {
 	var list []Comercial
-	err := db.Preload("Consultores").Find(&list).Error
+	err := db.
+		Preload("Consultores", func(db *gorm.DB) *gorm.DB {
+			return db.
+				Preload("Negociacoes").
+				Preload("Contratos").
+				Preload("Negociacoes.Contratos").
+				Preload("Negociacoes.Produtos")
+		}).
+		Find(&list).Error
 	return list, err
 }
 
 func (r *repositoryImpl) FindByID(db *gorm.DB, id uint) (*Comercial, error) {
 	var c Comercial
-	err := db.Preload("Consultores").First(&c, id).Error
+	err := db.
+		Preload("Consultores", func(db *gorm.DB) *gorm.DB {
+			return db.
+				Preload("Negociacoes").
+				Preload("Contratos").
+				Preload("Negociacoes.Contratos").
+				Preload("Negociacoes.Produtos")
+		}).
+		First(&c, id).Error
 	return &c, err
 }
 

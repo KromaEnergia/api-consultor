@@ -13,7 +13,7 @@ type Comercial struct {
 	Sobrenome   string                `gorm:"size:100;not null" json:"sobrenome"`
 	Documento   string                `gorm:"size:20;not null" json:"documento"`
 	Email       string                `gorm:"size:100;uniqueIndex;not null" json:"email"`
-	Password    string                `gorm:"size:255;not null" json:"-"` // não expõe a senha no JSON
+	Password    string                `gorm:"size:255;not null" json:"-"`
 	Telefone    string                `gorm:"size:20" json:"telefone"`
 	Foto        string                `gorm:"size:255" json:"foto"`
 	IsAdmin     bool                  `gorm:"default:false" json:"isAdmin"`
