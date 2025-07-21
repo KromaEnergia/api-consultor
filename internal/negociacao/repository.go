@@ -36,7 +36,7 @@ func (r *repositoryImpl) ListarPorConsultor(db *gorm.DB, consultorID uint) ([]Ne
 		Preload("Produtos").
 		Preload("Comentarios").
 		Preload("CalculosComissao").
-		Preload("Parcelas"). // <<<---- AJUSTE AQUI
+		Preload("CalculosComissao.Parcelas").
 		Find(&list).Error
 	return list, err
 }
@@ -49,7 +49,7 @@ func (r *repositoryImpl) BuscarPorID(db *gorm.DB, id uint) (*Negociacao, error) 
 		Preload("Produtos").
 		Preload("Comentarios").
 		Preload("CalculosComissao").
-		Preload("Parcelas"). // <<<---- AJUSTE AQUI
+		Preload("CalculosComissao.Parcelas").
 		First(&n, id).Error
 	if err != nil {
 		return nil, err

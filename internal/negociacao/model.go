@@ -21,6 +21,7 @@ type Negociacao struct {
 
 	Nome                string `json:"nome"`
 	Contato             string `json:"contato"`
+	NumeroDoContato     string `json:"numeroDoContato"`
 	Telefone            string `json:"telefone"`
 	CNPJ                string `json:"cnpj"`
 	Logo                string `json:"logo"`

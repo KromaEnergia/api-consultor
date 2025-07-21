@@ -34,6 +34,7 @@ func NewHandler(db *gorm.DB) *Handler {
 type negociacaoDTO struct {
 	Nome                string   `json:"nome"`
 	Contato             string   `json:"contato"`
+	NumeroDoContato     string   `json:"numeroDoContato"`
 	Telefone            string   `json:"telefone"`
 	CNPJ                string   `json:"cnpj"`
 	Logo                string   `json:"logo"`
@@ -66,6 +67,7 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 	n := Negociacao{
 		Nome:                dto.Nome,
 		Contato:             dto.Contato,
+		NumeroDoContato:     dto.NumeroDoContato,
 		Telefone:            dto.Telefone,
 		CNPJ:                dto.CNPJ,
 		Logo:                dto.Logo,
@@ -142,6 +144,7 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 
 	existing.Nome = dto.Nome
 	existing.Contato = dto.Contato
+	existing.NumeroDoContato = dto.NumeroDoContato
 	existing.Telefone = dto.Telefone
 	existing.CNPJ = dto.CNPJ
 	existing.Logo = dto.Logo
