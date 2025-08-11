@@ -164,28 +164,24 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(c)
 }
 
-// ListarConsultores retorna todos ou apenas o próprio registro
 func (h *Handler) ListarConsultores(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
 
-	if isAdmin {
-		consultores, err := h.Repository.ListarTodos(h.DB)
-		if err != nil {
-			http.Error(w, "erro ao listar consultores", http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(consultores)
-		return
-	}
+	consultores, err := h.Repository.ListarTodos(h.DB)
 
-	// não-admin vê apenas o próprio
-	obj, err := h.Repository.BuscarPorID(h.DB, userID)
 	if err != nil {
-		http.Error(w, "consultor não encontrado", http.StatusNotFound)
+
+		http.Error(w, "erro ao listar consultores", http.StatusInternalServerError)
+
 		return
+
 	}
-	json.NewEncoder(w).Encode([]Consultor{*obj})
+
+	// Define o cabeçalho como JSON e envia a resposta.
+
+	w.Header().Set("Content-Type", "application/json")
+
+	json.NewEncoder(w).Encode(consultores)
+
 }
 
 // BuscarPorID retorna um consultor pelo ID
@@ -633,4 +629,97 @@ func (h *ComissoesHandler) GetResumo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+func (h *Handler) ListarConsultoresSimples(w http.ResponseWriter, r *http.Request) {
+	// 1. Busca os dados (sem Preload)
+	consultores, err := h.Repository.ListarTodosSimples(h.DB)
+	if err != nil {
+		// 2. Trata o erro, se houver
+		http.Error(w, "erro ao listar consultores", http.StatusInternalServerError)
+		return
+	}
+
+	// 3. Define o tipo de conteúdo da resposta
+	w.Header().Set("Content-Type", "application/json")
+
+	// 4. Envia os dados como JSON (esta é a sua linha)
+	json.NewEncoder(w).Encode(consultores)
+}
+
+func (h *Handler) ListarConsultoresCompletos(w http.ResponseWriter, r *http.Request) {
+	consultores, err := h.Repository.ListarComPreload(h.DB)
+	if err != nil {
+		http.Error(w, "erro ao listar consultores com preload", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(consultores)
+}
+
+// Rota: GET /consultores/{id}/dados-bancarios
+func (h *Handler) GetDadosBancariosHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := mux.Vars(r)["id"]
+	consultorID, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		http.Error(w, "ID de consultor inválido", http.StatusBadRequest)
+		return
+	}
+
+	dados, err := h.Repository.GetDadosBancarios(h.DB, uint(consultorID))
+	if err != nil {
+		http.Error(w, "Erro ao buscar dados bancários", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(dados)
+}
+
+// UpdateDadosBancariosHandler atualiza os dados bancários de um consultor.
+// Rota: PUT /consultores/{id}/dados-bancarios
+func (h *Handler) UpdateDadosBancariosHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := mux.Vars(r)["id"]
+	consultorID, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		http.Error(w, "ID de consultor inválido", http.StatusBadRequest)
+		return
+	}
+
+	var dadosBancarios DadosBancarios
+	if err := json.NewDecoder(r.Body).Decode(&dadosBancarios); err != nil {
+		http.Error(w, "Dados de entrada inválidos", http.StatusBadRequest)
+		return
+	}
+
+	err = h.Repository.UpdateDadosBancarios(h.DB, uint(consultorID), dadosBancarios)
+	if err != nil {
+		http.Error(w, "Erro ao atualizar dados bancários", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários atualizados com sucesso"})
+}
+
+// DeleteDadosBancariosHandler deleta os dados bancários de um consultor.
+// Rota: DELETE /consultores/{id}/dados-bancarios
+func (h *Handler) DeleteDadosBancariosHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := mux.Vars(r)["id"]
+	consultorID, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		http.Error(w, "ID de consultor inválido", http.StatusBadRequest)
+		return
+	}
+
+	err = h.Repository.DeleteDadosBancarios(h.DB, uint(consultorID))
+	if err != nil {
+		http.Error(w, "Erro ao deletar dados bancários", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários deletados com sucesso"})
 }

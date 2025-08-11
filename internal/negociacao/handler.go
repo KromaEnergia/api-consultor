@@ -3,10 +3,12 @@ package negociacao
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/KromaEnergia/api-consultor/internal/auth"
+	"github.com/KromaEnergia/api-consultor/internal/models"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
 )
@@ -16,10 +18,25 @@ type AdicionarArquivosRequest struct {
 	NovosArquivos []string `json:"novosArquivos"`
 }
 
+// PatchAnexoEstudoRequest define o corpo da requisição para atualizar o anexo do estudo.
+type PatchAnexoEstudoRequest struct {
+	AnexoEstudo string `json:"anexoEstudo"`
+}
+
+// PatchContratoKCRequest define o corpo da requisição para atualizar o contrato KC.
+type PatchContratoKCRequest struct {
+	ContratoKC string `json:"contratoKC"`
+}
+
 // Handler encapsula DB e repository
 type Handler struct {
 	DB         *gorm.DB
 	Repository Repository
+}
+
+// CORREÇÃO: Struct para o payload de atualização de status definida corretamente.
+type atualizarStatusRequest struct {
+	Status string `json:"status"`
 }
 
 // NewHandler cria um novo handler de negociações
@@ -34,6 +51,7 @@ func NewHandler(db *gorm.DB) *Handler {
 type negociacaoDTO struct {
 	Nome                string   `json:"nome"`
 	Contato             string   `json:"contato"`
+	Email               string   `json:"email"`
 	NumeroDoContato     string   `json:"numeroDoContato"`
 	Telefone            string   `json:"telefone"`
 	CNPJ                string   `json:"cnpj"`
@@ -64,8 +82,9 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n := Negociacao{
+	n := models.Negociacao{
 		Nome:                dto.Nome,
+		Email:               dto.Email,
 		Contato:             dto.Contato,
 		NumeroDoContato:     dto.NumeroDoContato,
 		Telefone:            dto.Telefone,
@@ -130,7 +149,7 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	var existing Negociacao
+	var existing models.Negociacao
 	if err := h.DB.First(&existing, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
@@ -144,6 +163,7 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 
 	existing.Nome = dto.Nome
 	existing.Contato = dto.Contato
+	existing.Email = dto.Email
 	existing.NumeroDoContato = dto.NumeroDoContato
 	existing.Telefone = dto.Telefone
 	existing.CNPJ = dto.CNPJ
@@ -203,7 +223,7 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var existente Negociacao
+	var existente models.Negociacao
 	if err := h.DB.First(&existente, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
@@ -248,7 +268,7 @@ func (h *Handler) RemoverProduto(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	var existente Negociacao
+	var existente models.Negociacao
 	if err := h.DB.First(&existente, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
@@ -297,7 +317,7 @@ func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 	}
 	consultorID := userVal.(uint)
 
-	var existente Negociacao
+	var existente models.Negociacao
 	if err := h.DB.First(&existente, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
@@ -324,8 +344,176 @@ func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(existente)
 }
 
+// AtualizarStatus trata da requisição PATCH /negociacoes/{id}/status
+func (h *Handler) AtualizarStatus(w http.ResponseWriter, r *http.Request) {
+	// 1. Extrair o ID da URL e do usuário autenticado
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "ID da negociação inválido.", http.StatusBadRequest)
+		return
+	}
+	userVal := r.Context().Value(auth.UsuarioIDKey)
+	if userVal == nil {
+		http.Error(w, "Não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+
+	// 2. Decodificar o corpo (body) da requisição JSON
+	var payload atualizarStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Corpo da requisição (JSON) mal formado.", http.StatusBadRequest)
+		return
+	}
+	if payload.Status == "" {
+		http.Error(w, "O campo 'status' é obrigatório.", http.StatusBadRequest)
+		return
+	}
+
+	// MELHORIA 1: Verificação de Permissão
+	// Primeiro, buscamos a negociação para garantir que ela existe e para verificar o proprietário.
+	negociacaoExistente, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "Negociação não encontrada.", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Erro ao buscar negociação.", http.StatusInternalServerError)
+		return
+	}
+
+	// Apenas o admin ou o consultor dono da negociação podem alterá-la.
+	if !isAdmin && negociacaoExistente.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado.", http.StatusForbidden)
+		return
+	}
+
+	// 3. Chamar o repositório para atualizar o banco de dados
+	err = h.Repository.AtualizarStatus(h.DB, uint(id), payload.Status)
+	if err != nil {
+		// O erro de 'not found' já foi tratado acima, então aqui tratamos outros possíveis erros de DB.
+		http.Error(w, "Erro ao atualizar o status da negociação.", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Retorna a negociação completa e atualizada para o frontend
+	// Reutilizamos o objeto que já buscamos para a verificação de permissão.
+	negociacaoExistente.Status = payload.Status // Atualiza o status no objeto em memória
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(negociacaoExistente)
+}
+
 /*
 Rotas sugeridas:
 router.HandleFunc("/negociacoes/{id}/produtos/{idx}", handler.RemoverProduto).Methods("DELETE")
 router.HandleFunc("/negociacoes/{id}/arquivos/{idx}", handler.RemoverArquivo).Methods("DELETE")
 */
+// Adicione estas duas novas funções ao seu arquivo handler.go
+
+// PatchAnexoEstudo trata PATCH /negociacoes/{id}/anexo-estudo
+func (h *Handler) PatchAnexoEstudo(w http.ResponseWriter, r *http.Request) {
+	// 1. Extrair ID e validar permissões
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "ID da negociação inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Decodificar o corpo da requisição (payload)
+	var req PatchAnexoEstudoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+
+	// Validação manual, já que não estamos usando Gin
+	if req.AnexoEstudo == "" {
+		http.Error(w, "O campo 'anexoEstudo' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Buscar negociação para garantir que existe
+	var negociacao models.Negociacao
+	if err := h.DB.First(&negociacao, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Erro ao buscar negociação", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Preparar os dados para atualização atômica
+	updates := map[string]interface{}{
+		"anexo_estudo": req.AnexoEstudo,
+		"status":       "Estudo Feito",
+	}
+
+	// 5. Executar a atualização no banco de dados
+	// Usar Model(&negociacao).Updates() é eficiente para atualizar campos específicos.
+	if err := h.DB.Model(&negociacao).Updates(updates).Error; err != nil {
+		http.Error(w, "Erro ao atualizar a negociação", http.StatusInternalServerError)
+		return
+	}
+
+	// 6. Retornar a negociação atualizada
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(negociacao)
+}
+
+// PatchContratoKC trata PATCH /negociacoes/{id}/contrato-kc
+func (h *Handler) PatchContratoKC(w http.ResponseWriter, r *http.Request) {
+	// 1. Extrair ID
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "ID da negociação inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Decodificar o corpo da requisição
+	var req PatchContratoKCRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+
+	// Validação manual
+	if req.ContratoKC == "" {
+		http.Error(w, "O campo 'contratoKC' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Buscar negociação
+	var negociacao models.Negociacao
+	if err := h.DB.First(&negociacao, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Erro ao buscar negociação", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Preparar os dados para atualização
+	updates := map[string]interface{}{
+		"contrato_kc": req.ContratoKC,
+		"status":      "Contrato Assinado",
+	}
+
+	// 5. Executar a atualização
+	if err := h.DB.Model(&negociacao).Updates(updates).Error; err != nil {
+		http.Error(w, "Erro ao atualizar a negociação", http.StatusInternalServerError)
+		return
+	}
+
+	// 6. Retornar a negociação atualizada
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(negociacao)
+}
