@@ -24,6 +24,7 @@ func NewHandler(db *gorm.DB) *Handler {
 }
 
 // POST /comerciais/login
+// Valida email/senha, emite access token RS256 e seta refresh token em cookie httpOnly.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -42,14 +43,19 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.GerarToken(user.ID, user.IsAdmin)
+	// Emite access token e seta refresh (httpOnly) no cookie
+	access, err := auth.IssueTokensOnLogin(h.DB, w, user.ID /* isAdmin */, user.IsAdmin)
 	if err != nil {
-		http.Error(w, "erro ao gerar token", http.StatusInternalServerError)
+		http.Error(w, "erro ao gerar tokens", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"access_token": access,
+		"token_type":   "Bearer",
+		"expires_in":   int(auth.AccessTTL.Seconds()),
+	})
 }
 
 // POST /comerciais
@@ -84,22 +90,26 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(c)
 }
 
 // GET /comerciais
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	// Se esta rota já estiver atrás de auth.RequireAdmin no router,
+	// este check é redundante — mas mantém como fallback.
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
 	if !isAdmin {
 		http.Error(w, "acesso negado", http.StatusForbidden)
 		return
 	}
+
 	list, err := h.Repository.ListAll(h.DB)
 	if err != nil {
 		http.Error(w, "erro ao listar comerciais", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(list)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(list)
 }
 
 // GET /comerciais/{id}
@@ -110,8 +120,8 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
 	if !isAdmin && uint(id) != userID {
 		http.Error(w, "acesso negado", http.StatusForbidden)
 		return
@@ -122,14 +132,15 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "comercial não encontrado", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(obj)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(obj)
 }
 
 // PUT /comerciais/{id}
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
 	if !isAdmin && uint(id) != userID {
 		http.Error(w, "acesso negado", http.StatusForbidden)
 		return
@@ -146,14 +157,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("comercial atualizado com sucesso"))
+	_, _ = w.Write([]byte("comercial atualizado com sucesso"))
 }
 
 // DELETE /comerciais/{id}
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
 	if !isAdmin && uint(id) != userID {
 		http.Error(w, "acesso negado", http.StatusForbidden)
 		return
@@ -164,12 +175,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("comercial excluído com sucesso"))
+	_, _ = w.Write([]byte("comercial excluído com sucesso"))
 }
 
+// GET /comerciais/me
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	// Pega o ID do usuário do token
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
 
 	var c Comercial
 	// Carrega também o slice de Consultores e suas relações (Negociações, Contratos)
@@ -189,5 +200,5 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(c)
 }

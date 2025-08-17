@@ -28,6 +28,14 @@ type ResumoComissoes struct {
 	} `json:"comissoesAReceber"`
 }
 
+// MeDTO agrega o Consultor + totais de comissão
+type MeDTO struct {
+	Consultor interface{} `json:"consultor"`
+	// use float64; se quiser mais precisão, troque para decimal a partir do banco
+	ComissaoAReceber float64 `json:"comissaoAReceber"`
+	ComissaoRecebida float64 `json:"comissaoRecebida"`
+}
+
 type SolicitacaoCNPJRequest struct {
 	NovoCNPJ string `json:"novoCnpj"`
 }
@@ -87,7 +95,7 @@ func NewHandler(db *gorm.DB) *Handler {
 	return &Handler{DB: db, Repository: NewRepository()}
 }
 
-// Login gera JWT
+// Login gera access token RS256 e seta refresh em cookie httpOnly
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -106,14 +114,19 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.GerarToken(user.ID, user.IsAdmin)
+	// Emite access token (RS256) e refresh cookie (httpOnly)
+	access, err := auth.IssueTokensOnLogin(h.DB, w, user.ID /* isAdmin */, user.IsAdmin)
 	if err != nil {
 		http.Error(w, "erro ao gerar token", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"access_token": access,
+		"token_type":   "Bearer",
+		"expires_in":   int(auth.AccessTTL.Seconds()),
+	})
 }
 
 // CriarConsultor cadastro público
@@ -161,33 +174,23 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(c)
 }
 
 func (h *Handler) ListarConsultores(w http.ResponseWriter, r *http.Request) {
-
 	consultores, err := h.Repository.ListarTodos(h.DB)
-
 	if err != nil {
-
 		http.Error(w, "erro ao listar consultores", http.StatusInternalServerError)
-
 		return
-
 	}
-
-	// Define o cabeçalho como JSON e envia a resposta.
-
 	w.Header().Set("Content-Type", "application/json")
-
-	json.NewEncoder(w).Encode(consultores)
-
+	_ = json.NewEncoder(w).Encode(consultores)
 }
 
 // BuscarPorID retorna um consultor pelo ID
 func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -205,13 +208,14 @@ func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "consultor não encontrado", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(obj)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(obj)
 }
 
 // AtualizarConsultor altera dados de um consultor existente
 func (h *Handler) AtualizarConsultor(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -234,13 +238,13 @@ func (h *Handler) AtualizarConsultor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("consultor atualizado com sucesso"))
+	_, _ = w.Write([]byte("consultor atualizado com sucesso"))
 }
 
 // DeletarConsultor remove um consultor
 func (h *Handler) DeletarConsultor(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -258,13 +262,13 @@ func (h *Handler) DeletarConsultor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("consultor excluído com sucesso"))
+	_, _ = w.Write([]byte("consultor excluído com sucesso"))
 }
 
 // ObterResumoConsultor constrói e retorna o DTO de resumo
 func (h *Handler) ObterResumoConsultor(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	idParam := userID
 	if isAdmin {
@@ -284,19 +288,18 @@ func (h *Handler) ObterResumoConsultor(w http.ResponseWriter, r *http.Request) {
 	negociacoes, _ := negociacao.NewRepository().ListarPorConsultor(h.DB, consultorObj.ID)
 	contratos, _ := contrato.NewRepository().ListarPorConsultor(h.DB, consultorObj.ID)
 	prodRepo := produtos.NewRepository(h.DB)
-	produtosList, err := prodRepo.ListarPorConsultor(consultorObj.ID)
+	produtosList, _ := prodRepo.ListarPorConsultor(consultorObj.ID)
 	dto := MontarResumoConsultorDTO(*consultorObj, contratos, negociacoes, produtosList)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dto)
+	_ = json.NewEncoder(w).Encode(dto)
 }
 
 // GET /consultores/me
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
 
 	var c Consultor
-	// Preload das associações negociacoes e contratos
 	if err := h.DB.
 		Preload("Negociacoes").
 		Preload("Contratos").
@@ -309,14 +312,37 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var aReceber float64
+	var recebido float64
+
+	for _, neg := range c.Negociacoes {
+		for _, calc := range neg.CalculosComissao {
+			for _, p := range calc.Parcelas {
+				switch p.Status {
+				case "Pendente":
+					// conta só se a negociação estiver nesse status
+					if neg.Status == "Comissão a Receber" {
+						aReceber += p.Valor
+					}
+				case "Pago":
+					recebido += p.Valor
+				}
+			}
+		}
+	}
+
+	// ✅ coloca os totais dentro do consultor
+	c.ComissaoAReceber = aReceber
+	c.ComissaoRecebida = recebido
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(c)
 }
 
 // SolicitarAlteracaoCNPJ permite que um consultor peça a mudança do seu CNPJ
 func (h *Handler) SolicitarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -359,12 +385,12 @@ func (h *Handler) SolicitarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ enviada para aprovação."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ enviada para aprovação."})
 }
 
 // GerenciarAlteracaoCNPJ permite que um admin aprove ou negue a mudança de CNPJ
 func (h *Handler) GerenciarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request) {
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	// Apenas admins podem aprovar/negar
 	if !isAdmin {
@@ -413,13 +439,13 @@ func (h *Handler) GerenciarAlteracaoCNPJ(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ gerenciada com sucesso."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de CNPJ gerenciada com sucesso."})
 }
 
 // AtualizarTermoDeParceria permite que um consultor adicione/atualize seu link do termo
 func (h *Handler) AtualizarTermoDeParceria(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -460,14 +486,13 @@ func (h *Handler) AtualizarTermoDeParceria(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Termo de parceria atualizado com sucesso."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Termo de parceria atualizado com sucesso."})
 }
 
 // Em seu handler.go
-
 func (h *Handler) AtualizarMeuPerfil(w http.ResponseWriter, r *http.Request) {
 	// 1. Pega o ID do usuário que vem do token de autenticação
-	userID, ok := r.Context().Value(auth.UsuarioIDKey).(uint)
+	userID, ok := r.Context().Value(auth.CtxUserID).(uint)
 	if !ok {
 		http.Error(w, "ID de usuário inválido no token", http.StatusUnauthorized)
 		return
@@ -494,13 +519,13 @@ func (h *Handler) AtualizarMeuPerfil(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(consultorExistente) // Retorna o perfil atualizado
+	_ = json.NewEncoder(w).Encode(consultorExistente) // Retorna o perfil atualizado
 }
 
 // SolicitarAlteracaoEmail permite que um consultor peça a mudança do seu e-mail.
 func (h *Handler) SolicitarAlteracaoEmail(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	id, err := strconv.Atoi(mux.Vars(r)["id"])
 	if err != nil {
@@ -543,12 +568,12 @@ func (h *Handler) SolicitarAlteracaoEmail(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail enviada para aprovação."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail enviada para aprovação."})
 }
 
 // GerenciarAlteracaoEmail permite que um admin aprove ou negue a mudança de e-mail.
 func (h *Handler) GerenciarAlteracaoEmail(w http.ResponseWriter, r *http.Request) {
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
+	isAdmin := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	// Apenas admins podem aprovar/negar.
 	if !isAdmin {
@@ -597,13 +622,13 @@ func (h *Handler) GerenciarAlteracaoEmail(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail gerenciada com sucesso."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Solicitação de alteração de e-mail gerenciada com sucesso."})
 }
 
 // GetResumo trata GET /consultores/comissoes usando o usuário autenticado
 func (h *ComissoesHandler) GetResumo(w http.ResponseWriter, r *http.Request) {
 	// Extrai ID do consultor do contexto (do JWT)
-	userID := r.Context().Value(auth.UsuarioIDKey).(uint)
+	userID := r.Context().Value(auth.CtxUserID).(uint)
 
 	var res ResumoComissoes
 
@@ -628,22 +653,17 @@ func (h *ComissoesHandler) GetResumo(w http.ResponseWriter, r *http.Request) {
 		Scan(&res.ComissoesAReceber)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	_ = json.NewEncoder(w).Encode(res)
 }
+
 func (h *Handler) ListarConsultoresSimples(w http.ResponseWriter, r *http.Request) {
-	// 1. Busca os dados (sem Preload)
 	consultores, err := h.Repository.ListarTodosSimples(h.DB)
 	if err != nil {
-		// 2. Trata o erro, se houver
 		http.Error(w, "erro ao listar consultores", http.StatusInternalServerError)
 		return
 	}
-
-	// 3. Define o tipo de conteúdo da resposta
 	w.Header().Set("Content-Type", "application/json")
-
-	// 4. Envia os dados como JSON (esta é a sua linha)
-	json.NewEncoder(w).Encode(consultores)
+	_ = json.NewEncoder(w).Encode(consultores)
 }
 
 func (h *Handler) ListarConsultoresCompletos(w http.ResponseWriter, r *http.Request) {
@@ -654,7 +674,7 @@ func (h *Handler) ListarConsultoresCompletos(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(consultores)
+	_ = json.NewEncoder(w).Encode(consultores)
 }
 
 // Rota: GET /consultores/{id}/dados-bancarios
@@ -673,7 +693,7 @@ func (h *Handler) GetDadosBancariosHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dados)
+	_ = json.NewEncoder(w).Encode(dados)
 }
 
 // UpdateDadosBancariosHandler atualiza os dados bancários de um consultor.
@@ -700,7 +720,7 @@ func (h *Handler) UpdateDadosBancariosHandler(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários atualizados com sucesso"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários atualizados com sucesso"})
 }
 
 // DeleteDadosBancariosHandler deleta os dados bancários de um consultor.
@@ -721,5 +741,5 @@ func (h *Handler) DeleteDadosBancariosHandler(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários deletados com sucesso"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Dados bancários deletados com sucesso"})
 }

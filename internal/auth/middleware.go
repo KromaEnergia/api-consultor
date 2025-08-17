@@ -6,33 +6,40 @@ import (
 	"strings"
 )
 
-type contextKey string
-
+type ctxKey string
 const (
-	UsuarioIDKey contextKey = "usuarioID"
-	IsAdminKey   contextKey = "isAdmin"
+	CtxUserID  ctxKey = "usuarioID"
+	CtxIsAdmin ctxKey = "isAdmin"
 )
 
-// MiddlewareAutenticacao protege rotas com JWT
 func MiddlewareAutenticacao(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
-		header := r.Header.Get("Authorization")
-		if header == "" || !strings.HasPrefix(header, "Bearer ") {
-			http.Error(w, "Token ausente ou inválido", http.StatusUnauthorized)
-			return
+		h := r.Header.Get("Authorization")
+		if h == "" || !strings.HasPrefix(h, "Bearer ") {
+			http.Error(w, "Token ausente", http.StatusUnauthorized); return
 		}
-		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		claims, err := ValidarToken(tokenStr)
+		raw := strings.TrimPrefix(h, "Bearer ")
+		claims, err := ParseAndValidate(raw)
 		if err != nil {
-			http.Error(w, "Token inválido", http.StatusUnauthorized)
+			http.Error(w, "Token inválido", http.StatusUnauthorized); return
+		}
+		ctx := context.WithValue(r.Context(), CtxUserID, claims.UserID)
+		ctx = context.WithValue(ctx, CtxIsAdmin, claims.IsAdmin)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := r.Context().Value(CtxIsAdmin)
+		if ok, _ := v.(bool); !ok {
+			http.Error(w, "Forbidden (admin only)", http.StatusForbidden)
 			return
 		}
-		ctx := context.WithValue(r.Context(), UsuarioIDKey, claims.UserID)
-		ctx = context.WithValue(ctx, IsAdminKey, claims.IsAdmin)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }

@@ -69,7 +69,7 @@ type negociacaoDTO struct {
 
 // Criar trata POST /negociacoes
 func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
-	userVal := r.Context().Value(auth.UsuarioIDKey)
+	userVal := r.Context().Value(auth.CtxUserID)
 	if userVal == nil {
 		http.Error(w, "não autenticado", http.StatusUnauthorized)
 		return
@@ -108,29 +108,49 @@ func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(n)
+	_ = json.NewEncoder(w).Encode(n)
 }
 
 // ListarPorConsultor trata GET /consultores/{id}/negociacoes
 func (h *Handler) ListarPorConsultor(w http.ResponseWriter, r *http.Request) {
 	cid, _ := strconv.Atoi(mux.Vars(r)["id"])
+
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
+	if !isAdmin && uint(cid) != userID {
+		http.Error(w, "acesso negado", http.StatusForbidden)
+		return
+	}
+
 	list, err := h.Repository.ListarPorConsultor(h.DB, uint(cid))
 	if err != nil {
 		http.Error(w, "Erro ao listar negociações", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(list)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(list)
 }
 
 // BuscarPorID trata GET /negociacoes/{id}
 func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+
 	n, err := h.Repository.BuscarPorID(h.DB, uint(id))
 	if err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(n)
+
+	// Permissão: admin ou dono da negociação
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
+	if !isAdmin && n.ConsultorID != userID {
+		http.Error(w, "acesso negado", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(n)
 }
 
 // Atualizar trata PUT /negociacoes/{id}
@@ -142,16 +162,23 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userVal := r.Context().Value(auth.UsuarioIDKey)
+	userVal := r.Context().Value(auth.CtxUserID)
 	if userVal == nil {
 		http.Error(w, "não autenticado", http.StatusUnauthorized)
 		return
 	}
 	consultorID := userVal.(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	var existing models.Negociacao
 	if err := h.DB.First(&existing, id).Error; err != nil {
 		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+
+	// Permissão: admin ou dono
+	if !isAdmin && existing.ConsultorID != consultorID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
 		return
 	}
 
@@ -184,12 +211,26 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(existing)
+	_ = json.NewEncoder(w).Encode(existing)
 }
 
 // Deletar trata DELETE /negociacoes/{id}
 func (h *Handler) Deletar(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+
+	// Permissão: admin ou dono
+	var existente models.Negociacao
+	if err := h.DB.First(&existente, id).Error; err != nil {
+		http.Error(w, "Negociação não encontrada", http.StatusNotFound)
+		return
+	}
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
+	if !isAdmin && existente.ConsultorID != userID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
 	if err := h.Repository.Deletar(h.DB, uint(id)); err != nil {
 		http.Error(w, "Erro ao excluir negociação", http.StatusInternalServerError)
 		return
@@ -206,12 +247,13 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userVal := r.Context().Value(auth.UsuarioIDKey)
+	userVal := r.Context().Value(auth.CtxUserID)
 	if userVal == nil {
 		http.Error(w, "Não autenticado", http.StatusUnauthorized)
 		return
 	}
 	consultorID := userVal.(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	var req AdicionarArquivosRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -229,7 +271,6 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
 	if !isAdmin && existente.ConsultorID != consultorID {
 		http.Error(w, "Acesso negado", http.StatusForbidden)
 		return
@@ -242,8 +283,7 @@ func (h *Handler) AdicionarArquivos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(existente)
+	_ = json.NewEncoder(w).Encode(existente)
 }
 
 // RemoverProduto trata DELETE /negociacoes/{id}/produtos/{idx}
@@ -261,12 +301,13 @@ func (h *Handler) RemoverProduto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userVal := r.Context().Value(auth.UsuarioIDKey)
+	userVal := r.Context().Value(auth.CtxUserID)
 	if userVal == nil {
 		http.Error(w, "Não autenticado", http.StatusUnauthorized)
 		return
 	}
 	consultorID := userVal.(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	var existente models.Negociacao
 	if err := h.DB.First(&existente, id).Error; err != nil {
@@ -274,7 +315,6 @@ func (h *Handler) RemoverProduto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
 	if !isAdmin && existente.ConsultorID != consultorID {
 		http.Error(w, "Acesso negado", http.StatusForbidden)
 		return
@@ -292,10 +332,9 @@ func (h *Handler) RemoverProduto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(existente)
+	_ = json.NewEncoder(w).Encode(existente)
 }
 
-// RemoverArquivo trata DELETE /negociacoes/{id}/arquivos/{idx}
 func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 	idParam := mux.Vars(r)["id"]
 	idxParam := mux.Vars(r)["idx"]
@@ -310,12 +349,13 @@ func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userVal := r.Context().Value(auth.UsuarioIDKey)
+	userVal := r.Context().Value(auth.CtxUserID)
 	if userVal == nil {
 		http.Error(w, "Não autenticado", http.StatusUnauthorized)
 		return
 	}
 	consultorID := userVal.(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
 
 	var existente models.Negociacao
 	if err := h.DB.First(&existente, id).Error; err != nil {
@@ -323,7 +363,6 @@ func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
 	if !isAdmin && existente.ConsultorID != consultorID {
 		http.Error(w, "Acesso negado", http.StatusForbidden)
 		return
@@ -341,77 +380,8 @@ func (h *Handler) RemoverArquivo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(existente)
+	_ = json.NewEncoder(w).Encode(existente)
 }
-
-// AtualizarStatus trata da requisição PATCH /negociacoes/{id}/status
-func (h *Handler) AtualizarStatus(w http.ResponseWriter, r *http.Request) {
-	// 1. Extrair o ID da URL e do usuário autenticado
-	vars := mux.Vars(r)
-	id, err := strconv.Atoi(vars["id"])
-	if err != nil {
-		http.Error(w, "ID da negociação inválido.", http.StatusBadRequest)
-		return
-	}
-	userVal := r.Context().Value(auth.UsuarioIDKey)
-	if userVal == nil {
-		http.Error(w, "Não autenticado", http.StatusUnauthorized)
-		return
-	}
-	consultorID := userVal.(uint)
-	isAdmin := r.Context().Value(auth.IsAdminKey).(bool)
-
-	// 2. Decodificar o corpo (body) da requisição JSON
-	var payload atualizarStatusRequest
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Corpo da requisição (JSON) mal formado.", http.StatusBadRequest)
-		return
-	}
-	if payload.Status == "" {
-		http.Error(w, "O campo 'status' é obrigatório.", http.StatusBadRequest)
-		return
-	}
-
-	// MELHORIA 1: Verificação de Permissão
-	// Primeiro, buscamos a negociação para garantir que ela existe e para verificar o proprietário.
-	negociacaoExistente, err := h.Repository.BuscarPorID(h.DB, uint(id))
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			http.Error(w, "Negociação não encontrada.", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "Erro ao buscar negociação.", http.StatusInternalServerError)
-		return
-	}
-
-	// Apenas o admin ou o consultor dono da negociação podem alterá-la.
-	if !isAdmin && negociacaoExistente.ConsultorID != consultorID {
-		http.Error(w, "Acesso negado.", http.StatusForbidden)
-		return
-	}
-
-	// 3. Chamar o repositório para atualizar o banco de dados
-	err = h.Repository.AtualizarStatus(h.DB, uint(id), payload.Status)
-	if err != nil {
-		// O erro de 'not found' já foi tratado acima, então aqui tratamos outros possíveis erros de DB.
-		http.Error(w, "Erro ao atualizar o status da negociação.", http.StatusInternalServerError)
-		return
-	}
-
-	// 4. Retorna a negociação completa e atualizada para o frontend
-	// Reutilizamos o objeto que já buscamos para a verificação de permissão.
-	negociacaoExistente.Status = payload.Status // Atualiza o status no objeto em memória
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(negociacaoExistente)
-}
-
-/*
-Rotas sugeridas:
-router.HandleFunc("/negociacoes/{id}/produtos/{idx}", handler.RemoverProduto).Methods("DELETE")
-router.HandleFunc("/negociacoes/{id}/arquivos/{idx}", handler.RemoverArquivo).Methods("DELETE")
-*/
-// Adicione estas duas novas funções ao seu arquivo handler.go
 
 // PatchAnexoEstudo trata PATCH /negociacoes/{id}/anexo-estudo
 func (h *Handler) PatchAnexoEstudo(w http.ResponseWriter, r *http.Request) {
@@ -429,16 +399,14 @@ func (h *Handler) PatchAnexoEstudo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
-
-	// Validação manual, já que não estamos usando Gin
 	if req.AnexoEstudo == "" {
 		http.Error(w, "O campo 'anexoEstudo' é obrigatório", http.StatusBadRequest)
 		return
 	}
 
 	// 3. Buscar negociação para garantir que existe
-	var negociacao models.Negociacao
-	if err := h.DB.First(&negociacao, id).Error; err != nil {
+	var neg models.Negociacao
+	if err := h.DB.First(&neg, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 			return
@@ -447,23 +415,27 @@ func (h *Handler) PatchAnexoEstudo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Preparar os dados para atualização atômica
+	// Permissão: admin ou dono
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
+	if !isAdmin && neg.ConsultorID != userID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
 	updates := map[string]interface{}{
 		"anexo_estudo": req.AnexoEstudo,
 		"status":       "Estudo Feito",
 	}
 
-	// 5. Executar a atualização no banco de dados
-	// Usar Model(&negociacao).Updates() é eficiente para atualizar campos específicos.
-	if err := h.DB.Model(&negociacao).Updates(updates).Error; err != nil {
+	if err := h.DB.Model(&neg).Updates(updates).Error; err != nil {
 		http.Error(w, "Erro ao atualizar a negociação", http.StatusInternalServerError)
 		return
 	}
 
-	// 6. Retornar a negociação atualizada
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(negociacao)
+	_ = json.NewEncoder(w).Encode(neg)
 }
 
 // PatchContratoKC trata PATCH /negociacoes/{id}/contrato-kc
@@ -482,16 +454,14 @@ func (h *Handler) PatchContratoKC(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
-
-	// Validação manual
 	if req.ContratoKC == "" {
 		http.Error(w, "O campo 'contratoKC' é obrigatório", http.StatusBadRequest)
 		return
 	}
 
 	// 3. Buscar negociação
-	var negociacao models.Negociacao
-	if err := h.DB.First(&negociacao, id).Error; err != nil {
+	var neg models.Negociacao
+	if err := h.DB.First(&neg, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "Negociação não encontrada", http.StatusNotFound)
 			return
@@ -500,20 +470,90 @@ func (h *Handler) PatchContratoKC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Preparar os dados para atualização
+	// Permissão: admin ou dono
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+	userID, _ := r.Context().Value(auth.CtxUserID).(uint)
+	if !isAdmin && neg.ConsultorID != userID {
+		http.Error(w, "Acesso negado", http.StatusForbidden)
+		return
+	}
+
 	updates := map[string]interface{}{
 		"contrato_kc": req.ContratoKC,
 		"status":      "Contrato Assinado",
 	}
 
-	// 5. Executar a atualização
-	if err := h.DB.Model(&negociacao).Updates(updates).Error; err != nil {
+	if err := h.DB.Model(&neg).Updates(updates).Error; err != nil {
 		http.Error(w, "Erro ao atualizar a negociação", http.StatusInternalServerError)
 		return
 	}
 
-	// 6. Retornar a negociação atualizada
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(negociacao)
+	_ = json.NewEncoder(w).Encode(neg)
+}
+
+// AtualizarStatus trata PATCH /negociacoes/{id}/status
+func (h *Handler) AtualizarStatus(w http.ResponseWriter, r *http.Request) {
+	// 1) Pega o ID da URL
+	idStr := mux.Vars(r)["id"]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "ID da negociação inválido", http.StatusBadRequest)
+		return
+	}
+
+	// 2) Autenticação/Autorização (admin ou dono)
+	userVal := r.Context().Value(auth.CtxUserID)
+	if userVal == nil {
+		http.Error(w, "não autenticado", http.StatusUnauthorized)
+		return
+	}
+	consultorID := userVal.(uint)
+	isAdmin, _ := r.Context().Value(auth.CtxIsAdmin).(bool)
+
+	// 3) Body
+	type atualizarStatusRequest struct {
+		Status string `json:"status"`
+	}
+	var payload atualizarStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+	if payload.Status == "" {
+		http.Error(w, "o campo 'status' é obrigatório", http.StatusBadRequest)
+		return
+	}
+
+	// 4) Busca a negociação pra checar dono/permissão
+	neg, err := h.Repository.BuscarPorID(h.DB, uint(id))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "negociação não encontrada", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "erro ao buscar negociação", http.StatusInternalServerError)
+		return
+	}
+	if !isAdmin && neg.ConsultorID != consultorID {
+		http.Error(w, "acesso negado", http.StatusForbidden)
+		return
+	}
+
+	// (Opcional) validar status permitido — comente se não quiser travar
+	// allowed := map[string]bool{"Aberta":true,"Em Estudo":true,"Estudo Feito":true,"Contrato Enviado":true,"Contrato Assinado":true,"Fechada":true,"Cancelada":true}
+	// if !allowed[payload.Status] { http.Error(w, "status inválido", http.StatusBadRequest); return }
+
+	// 5) Atualiza no repositório
+	if err := h.Repository.AtualizarStatus(h.DB, uint(id), payload.Status); err != nil {
+		http.Error(w, "erro ao atualizar status", http.StatusInternalServerError)
+		return
+	}
+
+	// 6) Retorna a negociação atualizada
+	neg.Status = payload.Status
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(neg)
 }

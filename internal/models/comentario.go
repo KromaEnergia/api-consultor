@@ -5,14 +5,18 @@ import "gorm.io/gorm"
 // Comentario representa um comentário ou um registro de histórico em uma negociação.
 type Comentario struct {
 	gorm.Model
-	Texto        string `json:"texto"`        // Texto do comentário.
-	NegociacaoID uint   `json:"negociacaoId"` // Chave estrangeira para a negociação.
-	ConsultorID  uint   `json:"consultorId"`  // Chave estrangeira para o consultor autor. 0 se for do sistema.
+	Texto        string `json:"texto"`                     // Texto do comentário
+	NegociacaoID uint   `json:"negociacaoId" gorm:"index"` // FK da negociação
 
-	// Novo campo para identificar explicitamente comentários do sistema.
-	System bool `gorm:"default:false" json:"system"`
+	// Autor CONSULTOR (0 se não for consultor; para sistema/admin)
+	ConsultorID uint `json:"consultorId" gorm:"index"`
 
-	// A relação abaixo pode causar ciclos de importação se Negociacao também importar Comentario.
-	// Considere removê-la se não for estritamente necessária na serialização JSON.
-	// Negociacao    Negociacao `gorm:"foreignKey:NegociacaoID" json:"negociacao"`
+	// Autor COMERCIAL/Admin (nulo quando não for comercial)
+	ComercialID *uint `json:"comercialId" gorm:"index"`
+
+	// Mantém a coluna existente "system" no banco, mas no código chamamos de IsSystem.
+	IsSystem bool `gorm:"column:system;default:false" json:"system"`
+
+	// Opcional: flag semântica; pode ser derivada de (ComercialID != nil)
+	IsAdminAuthor bool `gorm:"column:is_admin_author;default:false" json:"isAdminAuthor"`
 }

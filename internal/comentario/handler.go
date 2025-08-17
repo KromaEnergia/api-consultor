@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
-	"github.com/KromaEnergia/api-consultor/internal/auth" // Importe o pacote de autenticação
+	"github.com/KromaEnergia/api-consultor/internal/auth"
 	"github.com/KromaEnergia/api-consultor/internal/models"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
@@ -31,68 +32,91 @@ type CriarComentarioRequest struct {
 	IsSystemComment bool   `json:"isSystemComment,omitempty"`
 }
 
-// CriarComentario trata da requisição POST /negociacoes/{id}/comentarios
+// helper para ponteiro
+func ptr[T any](v T) *T { return &v }
+
+// POST /negociacoes/{id}/comentarios
 func (h *Handler) CriarComentario(w http.ResponseWriter, r *http.Request) {
-	// 1. Extrair o ID da negociação da URL
+	// 1) ID da negociação
 	idStr := mux.Vars(r)["id"]
 	negID, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || negID <= 0 {
 		http.Error(w, "ID de negociação inválido", http.StatusBadRequest)
 		return
 	}
 
-	// 2. Decodificar o corpo da requisição
+	// 2) Body
 	var req CriarComentarioRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
-	if req.Texto == "" {
+	if strings.TrimSpace(req.Texto) == "" {
 		http.Error(w, "O campo 'texto' é obrigatório", http.StatusBadRequest)
 		return
 	}
 
-	var consultorID uint
-	isSystem := req.IsSystemComment
-
-	// 3. Determinar o autor e o tipo de comentário
-	if isSystem {
-		// Para comentários do sistema, o ID do consultor é 0.
-		consultorID = 0
-	} else {
-		// Para comentários de usuários, pegamos o ID do contexto de autenticação.
-		userVal := r.Context().Value(auth.UsuarioIDKey)
-		if userVal == nil {
-			http.Error(w, "Não autenticado", http.StatusUnauthorized)
-			return
-		}
-		consultorID = userVal.(uint)
+	// 3) Autenticação (claims no contexto)
+	userVal := r.Context().Value(auth.CtxUserID)
+	if userVal == nil {
+		http.Error(w, "Não autenticado", http.StatusUnauthorized)
+		return
 	}
-
-	// 4. Criar a entidade Comentario com o novo campo 'System'
-	c := models.Comentario{
-		Texto:        req.Texto,
-		NegociacaoID: uint(negID),
-		ConsultorID:  consultorID, // Será 0 se for do sistema
-		System:       isSystem,    // Define se o comentário é do sistema
+	usuarioID, ok := userVal.(uint)
+	if !ok || usuarioID == 0 {
+		http.Error(w, "Falha ao obter usuário do contexto", http.StatusUnauthorized)
+		return
 	}
+	isAdminVal := r.Context().Value(auth.CtxIsAdmin)
+	isAdmin, _ := isAdminVal.(bool)
 
-	// 5. Salvar usando o repositório
-	if err := h.Repository.Criar(h.DB, &c); err != nil {
-		http.Error(w, "Erro ao criar comentário", http.StatusInternalServerError)
+	// 4) Regra: comentário de sistema só admin
+	if req.IsSystemComment && !isAdmin {
+		http.Error(w, "Apenas admin pode criar comentário de sistema", http.StatusForbidden)
 		return
 	}
 
-	// 6. Retornar o comentário criado
+	// 5) Monta registro conforme autoria (NENHUMA mudança de model/DB)
+	com := models.Comentario{
+		NegociacaoID:  uint(negID),
+		Texto:         strings.TrimSpace(req.Texto),
+		IsSystem:      req.IsSystemComment,
+		IsAdminAuthor: isAdmin, // opcional; pode ser derivado de ComercialID != nil
+	}
+	if req.IsSystemComment {
+		// Comentário de sistema não tem autor consultor/comercial
+		com.ConsultorID = 0
+		com.ComercialID = nil
+	} else if isAdmin {
+		// Admin/Comercial vira "lado comercial"
+		com.ConsultorID = 0
+		com.ComercialID = ptr(usuarioID)
+	} else {
+		// Autor consultor
+		com.ConsultorID = usuarioID
+		com.ComercialID = nil
+	}
+
+	// 6) Persiste
+	if err := h.DB.Create(&com).Error; err != nil {
+		http.Error(w, "Erro ao salvar comentário", http.StatusInternalServerError)
+		return
+	}
+
+	// 7) Resposta crua do model (sem DTO)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(c)
+	_ = json.NewEncoder(w).Encode(com)
 }
 
-// ListarPorNegociacao trata GET /negociacoes/{id}/comentarios
+// GET /negociacoes/{id}/comentarios
 func (h *Handler) ListarPorNegociacao(w http.ResponseWriter, r *http.Request) {
 	idStr := mux.Vars(r)["id"]
-	id, _ := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
 
 	comentarios, err := h.Repository.ListarPorNegociacao(h.DB, uint(id))
 	if err != nil {
@@ -100,13 +124,18 @@ func (h *Handler) ListarPorNegociacao(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(comentarios)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(comentarios)
 }
 
-// RemoverComentario trata DELETE /comentarios/{id}
+// DELETE /comentarios/{id}
 func (h *Handler) RemoverComentario(w http.ResponseWriter, r *http.Request) {
 	idStr := mux.Vars(r)["id"]
-	id, _ := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
 
 	if err := h.Repository.Remover(h.DB, uint(id)); err != nil {
 		http.Error(w, "Erro ao remover comentário", http.StatusInternalServerError)
@@ -114,36 +143,46 @@ func (h *Handler) RemoverComentario(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Comentário removido com sucesso"))
+	_, _ = w.Write([]byte("Comentário removido com sucesso"))
 }
 
-// ListarTodos trata GET /comentarios
+// GET /comentarios
 func (h *Handler) ListarTodos(w http.ResponseWriter, r *http.Request) {
 	comentarios, err := h.Repository.ListarTodos(h.DB)
 	if err != nil {
 		http.Error(w, "Erro ao listar comentários", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(comentarios)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(comentarios)
 }
 
-// BuscarPorID trata GET /comentarios/{id}
+// GET /comentarios/{id}
 func (h *Handler) BuscarPorID(w http.ResponseWriter, r *http.Request) {
 	idStr := mux.Vars(r)["id"]
-	id, _ := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
 
 	comentario, err := h.Repository.BuscarPorID(h.DB, uint(id))
 	if err != nil {
 		http.Error(w, "Comentário não encontrado", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(comentario)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(comentario)
 }
 
-// Atualizar trata PUT /comentarios/{id}
+// PUT /comentarios/{id}
 func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 	idStr := mux.Vars(r)["id"]
-	id, _ := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "ID inválido", http.StatusBadRequest)
+		return
+	}
 
 	var payload struct {
 		Texto string `json:"texto"`
@@ -152,12 +191,16 @@ func (h *Handler) Atualizar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Erro ao decodificar JSON", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(payload.Texto) == "" {
+		http.Error(w, "O campo 'texto' é obrigatório", http.StatusBadRequest)
+		return
+	}
 
-	if err := h.Repository.Atualizar(h.DB, uint(id), payload.Texto); err != nil {
+	if err := h.Repository.Atualizar(h.DB, uint(id), strings.TrimSpace(payload.Texto)); err != nil {
 		http.Error(w, "Erro ao atualizar comentário", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Comentário atualizado com sucesso"))
+	_, _ = w.Write([]byte("Comentário atualizado com sucesso"))
 }

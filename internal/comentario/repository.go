@@ -33,6 +33,7 @@ func (r *repositoryImpl) ListarPorNegociacao(db *gorm.DB, negociacaoID uint) ([]
 func (r *repositoryImpl) Remover(db *gorm.DB, id uint) error {
 	return db.Delete(&models.Comentario{}, id).Error
 }
+
 func (r *repositoryImpl) ListarTodos(db *gorm.DB) ([]models.Comentario, error) {
 	var comentarios []models.Comentario
 	err := db.Find(&comentarios).Error
