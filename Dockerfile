@@ -1,26 +1,46 @@
-FROM golang:1.24-alpine
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+##########
+# BUILD  #
+##########
+FROM golang:1.24-alpine AS builder
+WORKDIR /src
 
-# Dependências
+RUN apk add --no-cache git ca-certificates
+
+# deps
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Código + chaves
+# código
 COPY . .
-# garante que a pasta keys vai pra imagem
-# (precisa existir ./keys/private.pem no host)
-COPY keys ./keys
 
-# ENVs usadas pelo pacote internal/auth
-ENV AUTH_RSA_PRIVATE_PATH=/app/keys/private.pem \
-    AUTH_KID=kroma-dev-v1 \
-    AUTH_ISSUER=http://localhost:8080 \
-    AUTH_AUDIENCE=portal-consultor-local \
-    COOKIE_SECURE=false
+# ✔️ Falha o build se a chave não estiver presente no contexto
+RUN test -f /src/keys/private.pem || (echo "ERROR: faltando keys/private.pem no build"; exit 1)
 
-# build
-RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/main.go
+# ✔️ Ajusta permissão segura ainda no builder
+RUN chmod 0400 /src/keys/private.pem
 
+# build estático
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -buildvcs=false -ldflags="-s -w" -o app ./cmd/main.go
+
+
+############
+# RUNTIME  #
+############
+FROM gcr.io/distroless/base-debian12
+WORKDIR /app
+
+# binário
+COPY --from=builder /src/app /app/app
+
+# ✔️ Copia a pasta keys e já muda owner para o usuário nonroot do distroless
+COPY --from=builder --chown=nonroot:nonroot /src/keys /app/keys
+
+ENV PORT=8080
 EXPOSE 8080
-CMD ["./main"]
+
+# roda como não-root
+USER nonroot:nonroot
+ENTRYPOINT ["/app/app"]

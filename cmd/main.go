@@ -24,22 +24,66 @@ import (
 	"gorm.io/gorm"
 )
 
-func main() {
-	// Conexão ao banco com retry
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		dsn = "host=db user=postgres password=postgres dbname=consultor port=5432 sslmode=disable"
+// Monta DSN a partir das envs ou usa DATABASE_DSN; fallback dev (docker-compose)
+func buildDSN() string {
+	if dsn := os.Getenv("DATABASE_DSN"); dsn != "" {
+		return dsn
 	}
 
+	host := os.Getenv("DB_HOST")
+	user := os.Getenv("DB_USER")
+	pass := os.Getenv("DB_PASSWORD")
+	name := os.Getenv("DB_NAME")
+	port := os.Getenv("DB_PORT")
+	if port == "" {
+		port = "5432"
+	}
+
+	if host != "" && user != "" && name != "" {
+		ssl := os.Getenv("DB_SSLMODE")
+		if ssl == "" {
+			ssl = "require" // AWS RDS costuma pedir require
+		}
+		return fmt.Sprintf(
+			"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
+			host, user, pass, name, port, ssl,
+		)
+	}
+
+	// fallback local (docker-compose)
+	return "host=db user=postgres password=postgres dbname=consultor port=5432 sslmode=disable"
+}
+
+func main() {
+	// ====== MODO SEM BANCO (para teste no App Runner) ======
+	if os.Getenv("SKIP_DB") == "1" {
+		r := mux.NewRouter()
+		r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}).Methods(http.MethodGet)
+
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		log.Printf("[WARN] SKIP_DB=1: subindo só /health em :%s", port)
+		log.Fatal(http.ListenAndServe(":"+port, r))
+		return
+	}
+	// ====== FIM DO MODO SEM BANCO ======
+
+	// -------- Conexão ao banco com retry --------
+	dsn := buildDSN()
 	var db *gorm.DB
 	var err error
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 10; i++ {
 		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
 			break
 		}
-		if strings.Contains(err.Error(), "starting up") {
-			log.Printf("Banco ainda iniciando (tentativa %d/5), aguardando 2s...\n", i)
+		if strings.Contains(err.Error(), "starting up") || strings.Contains(err.Error(), "connection refused") {
+			log.Printf("Banco indisponível (tentativa %d/10): %v. Aguardando 2s...", i, err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -49,26 +93,25 @@ func main() {
 		log.Fatal("Erro ao conectar no banco: ", err)
 	}
 
-	// *** CUIDADO: ISSO APAGA TODAS AS TABELAS ***
-	// Deixe apenas em ambiente de DEV quando precisar resetar.
-
-	log.Println("[AVISO] APAGANDO TODAS AS TABELAS DO BANCO DE DADOS...")
-	if err := db.Migrator().DropTable(
-		&parcelacomissao.ParcelaComissao{},
-		&calculocomissao.CalculoComissao{},
-		&produtos.Produto{},
-		&contrato.Contrato{},
-		&models.Comentario{},
-		&models.Negociacao{},
-		&consultor.Consultor{},
-		&comercial.Comercial{},
-		&auth.RefreshToken{},
-	); err != nil {
-		log.Fatal("Erro ao apagar tabelas: ", err)
+	// -------- DropTable só em DEV --------
+	if os.Getenv("DEV_DROP_ALL") == "1" {
+		log.Println("[DEV] APAGANDO TODAS AS TABELAS... (DEV_DROP_ALL=1)")
+		if err := db.Migrator().DropTable(
+			&parcelacomissao.ParcelaComissao{},
+			&calculocomissao.CalculoComissao{},
+			&produtos.Produto{},
+			&contrato.Contrato{},
+			&models.Comentario{},
+			&models.Negociacao{},
+			&consultor.Consultor{},
+			&comercial.Comercial{},
+			&auth.RefreshToken{},
+		); err != nil {
+			log.Fatal("Erro ao apagar tabelas: ", err)
+		}
 	}
-	log.Println("[SUCESSO] Todas as tabelas foram apagadas.")
 
-	// AutoMigrate modelos (INCLUI o RefreshToken)
+	// -------- AutoMigrate --------
 	if err := db.AutoMigrate(
 		&consultor.Consultor{},
 		&comercial.Comercial{},
@@ -78,12 +121,12 @@ func main() {
 		&produtos.Produto{},
 		&calculocomissao.CalculoComissao{},
 		&parcelacomissao.ParcelaComissao{},
-		&auth.RefreshToken{}, // <<< AQUI
+		&auth.RefreshToken{},
 	); err != nil {
 		log.Fatal("Erro no AutoMigrate: ", err)
 	}
 
-	// Instancia handlers/repos
+	// -------- Instancia handlers/repos --------
 	consultorHandler := consultor.NewHandler(db)
 	comercialHandler := comercial.NewHandler(db)
 	negHandler := negociacao.NewHandler(db)
@@ -97,26 +140,24 @@ func main() {
 
 	parcelaRepo := parcelacomissao.NewRepository(db)
 	parcelaHandler := parcelacomissao.NewHandler(parcelaRepo)
-	parcelasHandler := parcelacomissao.NewHandler(parcelaRepo)
 
-	comissoesHandler := consultor.NewComissoesHandler(db)
 	comentHandler := comentario.NewHandler(db)
 
-	// Router
+	// -------- Router --------
 	r := mux.NewRouter()
 
-	// ---------- Rotas públicas ----------
-	// JWKS (chaves públicas do JWT RS256)
-	r.HandleFunc("/.well-known/jwks.json", auth.JWKSHandler).Methods("GET")
+	// Healthcheck (para App Runner/ECS)
+	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}).Methods(http.MethodGet)
 
-	// Auth (refresh/logout)
+	// ---------- Rotas públicas ----------
+	r.HandleFunc("/.well-known/jwks.json", auth.JWKSHandler).Methods("GET")
 	r.HandleFunc("/auth/refresh", auth.RefreshHTTPHandler(db)).Methods("POST")
 	r.HandleFunc("/auth/logout", auth.LogoutHTTPHandler(db)).Methods("POST")
-
-	// Logins e criação (públicas)
 	r.HandleFunc("/consultores/login", consultorHandler.Login).Methods("POST")
 	r.HandleFunc("/consultores", consultorHandler.CriarConsultor).Methods("POST")
-
 	r.HandleFunc("/comerciais/login", comercialHandler.Login).Methods("POST")
 	r.HandleFunc("/comerciais", comercialHandler.Create).Methods("POST")
 
@@ -124,18 +165,16 @@ func main() {
 	authRoutes := r.PathPrefix("").Subrouter()
 	authRoutes.Use(auth.MiddlewareAutenticacao)
 
-	// Admin-only (Comercial manda em tudo)
 	adminRoutes := authRoutes.PathPrefix("").Subrouter()
 	adminRoutes.Use(auth.RequireAdmin)
 	adminRoutes.HandleFunc("/comerciais", comercialHandler.List).Methods("GET")
 	adminRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.Update).Methods("PUT")
 	adminRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.Delete).Methods("DELETE")
 
-	// Comercial - rotas não admin (ex.: me)
 	authRoutes.HandleFunc("/comerciais/me", comercialHandler.Me).Methods("GET")
 	authRoutes.HandleFunc("/comerciais/{id:[0-9]+}", comercialHandler.GetByID).Methods("GET")
 
-	// Consultores (subrouter com auth)
+	// Consultores
 	consultorRoutes := authRoutes.PathPrefix("/consultores").Subrouter()
 	consultorRoutes.HandleFunc("/me", consultorHandler.Me).Methods("GET")
 	consultorRoutes.HandleFunc("", consultorHandler.ListarConsultores).Methods("GET")
@@ -154,7 +193,6 @@ func main() {
 	consultorRoutes.HandleFunc("/{id}/dados-bancarios", consultorHandler.GetDadosBancariosHandler).Methods("GET")
 	consultorRoutes.HandleFunc("/{id}/dados-bancarios", consultorHandler.UpdateDadosBancariosHandler).Methods("PUT")
 	consultorRoutes.HandleFunc("/{id}/dados-bancarios", consultorHandler.DeleteDadosBancariosHandler).Methods("DELETE")
-	consultorRoutes.HandleFunc("/comissoes", comissoesHandler.GetResumo).Methods("GET")
 
 	// Negociações
 	authRoutes.HandleFunc("/negociacoes", negHandler.Criar).Methods("POST")
@@ -202,21 +240,28 @@ func main() {
 	authRoutes.HandleFunc("/parcelas/{pid}/status", parcelaHandler.UpdateStatus).Methods("PATCH")
 	authRoutes.HandleFunc("/parcelas/{pid}/anexo", parcelaHandler.UpdateAnexo).Methods("POST")
 	authRoutes.HandleFunc("/parcelas/{pid}/anexo", parcelaHandler.DeleteAnexo).Methods("DELETE")
-	authRoutes.HandleFunc("/calculos-comissao/{cid}/parcelas", parcelasHandler.List).Methods("GET")
-	authRoutes.HandleFunc("/parcelas/{pid}/status", parcelasHandler.UpdateStatus).Methods("PATCH")
 	authRoutes.HandleFunc("/parcelas/{pid}", parcelaHandler.Update).Methods("PUT")
 
-	// CORS (ajuste AllowedOrigins p/ seu front se usar cookies httpOnly no refresh)
+	// -------- CORS --------
+	origins := os.Getenv("ALLOWED_ORIGINS")
+	if origins == "" {
+		origins = "http://localhost:3000"
+	}
+	allowed := strings.Split(origins, ",")
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedOrigins:   allowed,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Authorization"},
-		AllowCredentials: true, // p/ enviar cookie do refresh
+		AllowCredentials: true,
 	})
 
 	handler := c.Handler(r)
 
-	fmt.Println("Servidor rodando em http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Printf("Servidor rodando em :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
