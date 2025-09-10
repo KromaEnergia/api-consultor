@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,41 +17,11 @@ import (
 	"github.com/KromaEnergia/api-consultor/internal/negociacao"
 	"github.com/KromaEnergia/api-consultor/internal/parcelacomissao"
 	"github.com/KromaEnergia/api-consultor/internal/produtos"
+	"github.com/KromaEnergia/api-consultor/internal/utils/db"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
-
-// Monta DSN a partir das envs ou usa DATABASE_DSN; fallback dev (docker-compose)
-func buildDSN() string {
-	if dsn := os.Getenv("DATABASE_DSN"); dsn != "" {
-		return dsn
-	}
-
-	host := os.Getenv("DB_HOST")
-	user := os.Getenv("DB_USER")
-	pass := os.Getenv("DB_PASSWORD")
-	name := os.Getenv("DB_NAME")
-	port := os.Getenv("DB_PORT")
-	if port == "" {
-		port = "5432"
-	}
-
-	if host != "" && user != "" && name != "" {
-		ssl := os.Getenv("DB_SSLMODE")
-		if ssl == "" {
-			ssl = "require" // AWS RDS costuma pedir require
-		}
-		return fmt.Sprintf(
-			"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
-			host, user, pass, name, port, ssl,
-		)
-	}
-
-	// fallback local (docker-compose)
-	return "host=db user=postgres password=postgres dbname=consultor port=5432 sslmode=disable"
-}
 
 func main() {
 	// ====== MODO SEM BANCO (para teste no App Runner) ======
@@ -74,11 +43,10 @@ func main() {
 	// ====== FIM DO MODO SEM BANCO ======
 
 	// -------- Conexão ao banco com retry --------
-	dsn := buildDSN()
-	var db *gorm.DB
+	var database *gorm.DB
 	var err error
 	for i := 1; i <= 10; i++ {
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		database, err = db.GetDB()
 		if err == nil {
 			break
 		}
@@ -96,7 +64,7 @@ func main() {
 	// -------- DropTable só em DEV --------
 	if os.Getenv("DEV_DROP_ALL") == "1" {
 		log.Println("[DEV] APAGANDO TODAS AS TABELAS... (DEV_DROP_ALL=1)")
-		if err := db.Migrator().DropTable(
+		if err := database.Migrator().DropTable(
 			&parcelacomissao.ParcelaComissao{},
 			&calculocomissao.CalculoComissao{},
 			&produtos.Produto{},
@@ -112,9 +80,16 @@ func main() {
 	}
 
 	// -------- AutoMigrate --------
-	if err := db.AutoMigrate(
-		&consultor.Consultor{},
+	if err := database.AutoMigrate(
 		&comercial.Comercial{},
+	); err != nil {
+		log.Fatal("Erro no AutoMigrate: comercial ", err)
+	}
+
+	// -------- AutoMigrate --------
+	if err := database.AutoMigrate(
+
+		&consultor.Consultor{},
 		&models.Negociacao{},
 		&models.Comentario{},
 		&contrato.Contrato{},
@@ -127,21 +102,21 @@ func main() {
 	}
 
 	// -------- Instancia handlers/repos --------
-	consultorHandler := consultor.NewHandler(db)
-	comercialHandler := comercial.NewHandler(db)
-	negHandler := negociacao.NewHandler(db)
-	contratoHandler := contrato.NewHandler(db)
+	consultorHandler := consultor.NewHandler(database)
+	comercialHandler := comercial.NewHandler(database)
+	negHandler := negociacao.NewHandler(database)
+	contratoHandler := contrato.NewHandler(database)
 
-	prodRepo := produtos.NewRepository(db)
+	prodRepo := produtos.NewRepository(database)
 	prodHandler := produtos.NewHandler(prodRepo)
 
-	calcRepo := calculocomissao.NewRepository(db)
+	calcRepo := calculocomissao.NewRepository(database)
 	calcHandler := calculocomissao.NewHandler(calcRepo)
 
-	parcelaRepo := parcelacomissao.NewRepository(db)
+	parcelaRepo := parcelacomissao.NewRepository(database)
 	parcelaHandler := parcelacomissao.NewHandler(parcelaRepo)
 
-	comentHandler := comentario.NewHandler(db)
+	comentHandler := comentario.NewHandler(database)
 
 	// -------- Router --------
 	r := mux.NewRouter()
@@ -154,8 +129,8 @@ func main() {
 
 	// ---------- Rotas públicas ----------
 	r.HandleFunc("/.well-known/jwks.json", auth.JWKSHandler).Methods("GET")
-	r.HandleFunc("/auth/refresh", auth.RefreshHTTPHandler(db)).Methods("POST")
-	r.HandleFunc("/auth/logout", auth.LogoutHTTPHandler(db)).Methods("POST")
+	r.HandleFunc("/auth/refresh", auth.RefreshHTTPHandler(database)).Methods("POST")
+	r.HandleFunc("/auth/logout", auth.LogoutHTTPHandler(database)).Methods("POST")
 	r.HandleFunc("/consultores/login", consultorHandler.Login).Methods("POST")
 	r.HandleFunc("/consultores", consultorHandler.CriarConsultor).Methods("POST")
 	r.HandleFunc("/comerciais/login", comercialHandler.Login).Methods("POST")
@@ -236,11 +211,16 @@ func main() {
 	authRoutes.HandleFunc("/negociacoes/{id}/calculos-comissao/{cid}/status", calcHandler.UpdateStatus).Methods("PATCH")
 
 	// Parcelas de comissão
-	authRoutes.HandleFunc("/calculos-comissao/{cid}/parcelas", parcelaHandler.List).Methods("GET")
-	authRoutes.HandleFunc("/parcelas/{pid}/status", parcelaHandler.UpdateStatus).Methods("PATCH")
-	authRoutes.HandleFunc("/parcelas/{pid}/anexo", parcelaHandler.UpdateAnexo).Methods("POST")
-	authRoutes.HandleFunc("/parcelas/{pid}/anexo", parcelaHandler.DeleteAnexo).Methods("DELETE")
-	authRoutes.HandleFunc("/parcelas/{pid}", parcelaHandler.Update).Methods("PUT")
+	// criar/listar parcelas de um cálculo
+	authRoutes.HandleFunc("/calculos-comissao/{cid:[0-9]+}/parcelas", parcelaHandler.CreateForCalculo).Methods(http.MethodPost)
+	authRoutes.HandleFunc("/calculos-comissao/{cid:[0-9]+}/parcelas", parcelaHandler.List).Methods(http.MethodGet)
+
+	// operações sobre uma parcela específica
+	authRoutes.HandleFunc("/parcelas/{pid:[0-9]+}", parcelaHandler.Update).Methods(http.MethodPut)
+	authRoutes.HandleFunc("/parcelas/{pid:[0-9]+}", parcelaHandler.Delete).Methods(http.MethodDelete)
+	authRoutes.HandleFunc("/parcelas/{pid:[0-9]+}/status", parcelaHandler.UpdateStatus).Methods(http.MethodPatch)
+	authRoutes.HandleFunc("/parcelas/{pid:[0-9]+}/anexo", parcelaHandler.UpdateAnexo).Methods(http.MethodPost)
+	authRoutes.HandleFunc("/parcelas/{pid:[0-9]+}/anexo", parcelaHandler.DeleteAnexo).Methods(http.MethodDelete)
 
 	// -------- CORS --------
 	origins := os.Getenv("ALLOWED_ORIGINS")

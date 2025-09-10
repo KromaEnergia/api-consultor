@@ -27,6 +27,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ID de negociação inválido", http.StatusBadRequest)
 		return
 	}
+	defer r.Body.Close()
 
 	// 2) decodifica no DTO
 	var dto CreateCalculoDTO
@@ -35,20 +36,33 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3) parse de strings para time.Time
+	// 3) parse de datas
 	parse := func(s string) time.Time {
 		t, _ := time.Parse(time.RFC3339, s)
 		return t
 	}
 	dataGeracao := parse(dto.DataGeracao)
-	dataPagamentoInicial := parse(dto.DataPagamentoInicial)  // para dividirInicialEmDuas
-	dataPagamentoFinal := parse(dto.DataPagamentoFinal)      // para dividirInicialEmDuas
-	dataPrimeira := parse(dto.DataVencimentoPrimeiraParcela) // para pagamentoInicialEParcelas
-	dataInicio := parse(dto.DataInicioParcelas)              // para pagamentoInicialEParcelas e parcelasIguais
+	dataPagamentoInicial := parse(dto.DataPagamentoInicial)  // dividirInicialEmDuas
+	dataPagamentoFinal := parse(dto.DataPagamentoFinal)      // dividirInicialEmDuas
+	dataPrimeira := parse(dto.DataVencimentoPrimeiraParcela) // pagamentoInicialEParcelas
+	dataInicio := parse(dto.DataInicioParcelas)              // pagamentoInicialEParcelas e parcelasIguais
 	inicioContrato := parse(dto.InicioContrato)
 	terminoContrato := parse(dto.TerminioContrato)
 
-	// 4) monta o model
+	// 4) inicia transação
+	tx := h.Repo.DB.Begin()
+	if tx.Error != nil {
+		http.Error(w, "Não foi possível iniciar transação", http.StatusInternalServerError)
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback()
+			http.Error(w, "Falha interna", http.StatusInternalServerError)
+		}
+	}()
+
+	// 5) monta o model do cálculo (TotalReceber começa 0; será calculado via parcelas)
 	calc := CalculoComissao{
 		NegociacaoID:          uint(negID),
 		ModalidadeRecebimento: dto.ModalidadeRecebimento,
@@ -57,26 +71,26 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		ValorGestaoMensal:     dto.ValorGestaoMensal,
 		EnergiaMensal:         dto.EnergiaMensal,
 		PossuiComissaoGestao:  dto.PossuiComissaoGestao,
-		TotalReceber:          dto.TotalReceber,
+		TotalReceber:          0,
 		InicioContrato:        inicioContrato,
 		TerminioContrato:      terminoContrato,
 		QtdParcelas:           dto.QtdParcelas,
 		DataGeracao:           dataGeracao,
 	}
 
-	// 5) persiste o cálculo
-	if err := h.Repo.Create(&calc); err != nil {
+	// 6) persiste o cálculo
+	if err := tx.Create(&calc).Error; err != nil {
+		_ = tx.Rollback()
 		http.Error(w, "Erro ao criar cálculo", http.StatusInternalServerError)
 		return
 	}
 
-	// 6) gera parcelas conforme o modo de pagamento
-	parcRepo := parcelacomissao.NewRepository(h.Repo.DB)
+	// 7) gera parcelas conforme o modo de pagamento
+	parcRepo := parcelacomissao.NewRepository(tx)
 	var parcelas []*parcelacomissao.ParcelaComissao
 
 	switch dto.ModoPagamento {
 	case "dividirInicialEmDuas":
-		// duas cobranças avulsas
 		parcelas = append(parcelas,
 			&parcelacomissao.ParcelaComissao{
 				CalculoComissaoID: calc.ID,
@@ -93,7 +107,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		)
 
 	case "pagamentoInicialEParcelas":
-		// primeira parcela “maior”
 		if dto.ValorPrimeiraParcela > 0 {
 			parcelas = append(parcelas, &parcelacomissao.ParcelaComissao{
 				CalculoComissaoID: calc.ID,
@@ -102,7 +115,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				Status:            "Pendente",
 			})
 		}
-		// demais parcelas iguais
 		for i := 0; i < dto.QtdParcelas; i++ {
 			parcelas = append(parcelas, &parcelacomissao.ParcelaComissao{
 				CalculoComissaoID: calc.ID,
@@ -113,7 +125,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "parcelasIguais":
-		// todas as parcelas iguais, sem pagamento inicial
 		for i := 0; i < dto.QtdParcelas; i++ {
 			parcelas = append(parcelas, &parcelacomissao.ParcelaComissao{
 				CalculoComissaoID: calc.ID,
@@ -124,20 +135,53 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 	default:
+		_ = tx.Rollback()
 		http.Error(w, "Modo de pagamento inválido", http.StatusBadRequest)
 		return
 	}
 
-	if err := parcRepo.CreateInBatch(parcelas); err != nil {
-		http.Error(w, "Erro ao criar parcelas", http.StatusInternalServerError)
+	if len(parcelas) > 0 {
+		if err := parcRepo.CreateInBatch(parcelas); err != nil {
+			_ = tx.Rollback()
+			http.Error(w, "Erro ao criar parcelas", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 8) soma TOTAL a partir da tabela parcelacomissao
+	var total float64
+	if err := tx.
+		Model(&parcelacomissao.ParcelaComissao{}).
+		Where("calculo_comissao_id = ?", calc.ID).
+		Select("COALESCE(SUM(valor), 0)").
+		Scan(&total).Error; err != nil {
+		_ = tx.Rollback()
+		http.Error(w, "Erro ao somar parcelas", http.StatusInternalServerError)
 		return
 	}
 
-	// 7) recarrega e retorna
-	h.Repo.DB.Preload("Parcelas").First(&calc, calc.ID)
+	// 9) atualiza o cálculo com o total
+	if err := tx.Model(&calc).Update("total_receber", total).Error; err != nil {
+		_ = tx.Rollback()
+		http.Error(w, "Erro ao atualizar total do cálculo", http.StatusInternalServerError)
+		return
+	}
+
+	// 10) commit e resposta
+	if err := tx.Commit().Error; err != nil {
+		_ = tx.Rollback()
+		http.Error(w, "Erro ao confirmar transação", http.StatusInternalServerError)
+		return
+	}
+
+	// recarrega (fora da tx) com preload
+	if err := h.Repo.DB.Preload("Parcelas").First(&calc, calc.ID).Error; err != nil {
+		http.Error(w, "Erro ao carregar cálculo", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(calc)
+	_ = json.NewEncoder(w).Encode(calc)
 }
 
 // List trata GET /negociacoes/{id}/calculos-comissao

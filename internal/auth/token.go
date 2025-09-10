@@ -16,7 +16,7 @@ type Claims struct {
 }
 
 // Tempo de vida do access token
-const AccessTTL = 15 * time.Minute
+const AccessTTL = 10080 * time.Minute
 
 // Gera um JWT RS256 com KID, iss, aud, iat, nbf e jti
 

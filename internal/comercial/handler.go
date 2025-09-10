@@ -2,6 +2,7 @@ package comercial
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -46,7 +47,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// Emite access token e seta refresh (httpOnly) no cookie
 	access, err := auth.IssueTokensOnLogin(h.DB, w, user.ID /* isAdmin */, user.IsAdmin)
 	if err != nil {
-		http.Error(w, "erro ao gerar tokens", http.StatusInternalServerError)
+		fmt.Print("Erro ao gerar tokens: ", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
