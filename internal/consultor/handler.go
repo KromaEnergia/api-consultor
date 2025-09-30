@@ -164,7 +164,7 @@ func (h *Handler) CriarConsultor(w http.ResponseWriter, r *http.Request) {
 		Senha:                 string(hash),
 		PrecisaRedefinirSenha: false,
 		IsAdmin:               req.IsAdmin,
-		ComercialID:           req.ComercialID, // ← aqui
+		ComercialID:           req.ComercialID, // <-- FALTAVA ISSO
 	}
 
 	if err := h.Repository.Salvar(h.DB, &c); err != nil {
@@ -319,19 +319,15 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		for _, calc := range neg.CalculosComissao {
 			for _, p := range calc.Parcelas {
 				switch p.Status {
-				case "Pendente":
-					// conta só se a negociação estiver nesse status
-					if neg.Status == "Comissão a Receber" {
-						aReceber += p.Valor
-					}
 				case "Pago":
 					recebido += p.Valor
+				case "Pendente", "Atrasado":
+					aReceber += p.Valor
 				}
 			}
 		}
 	}
 
-	// ✅ coloca os totais dentro do consultor
 	c.ComissaoAReceber = aReceber
 	c.ComissaoRecebida = recebido
 
@@ -627,29 +623,36 @@ func (h *Handler) GerenciarAlteracaoEmail(w http.ResponseWriter, r *http.Request
 
 // GetResumo trata GET /consultores/comissoes usando o usuário autenticado
 func (h *ComissoesHandler) GetResumo(w http.ResponseWriter, r *http.Request) {
-	// Extrai ID do consultor do contexto (do JWT)
 	userID := r.Context().Value(auth.CtxUserID).(uint)
 
 	var res ResumoComissoes
 
-	// Total recebido (status Pago) para negociações fechadas
-	h.DB.Table("parcela_comissaos").
-		Select(
-			"SUM(calculo_comissaos.energia_mensal) AS energia_recebida, "+
-				"SUM(calculo_comissaos.valor_gestao_mensal) AS gestao_recebida").
-		Joins("JOIN calculo_comissaos ON calculo_comissaos.id = parcela_comissaos.calculo_comissao_id").
-		Joins("JOIN negociacoes ON negociacoes.id = calculo_comissaos.negociacao_id").
-		Where("negociacoes.consultor_id = ? AND negociacoes.status = ? AND parcela_comissaos.status = ?", userID, "Fechada", "Pago").
+	// RECEBIDAS (Pago)
+	h.DB.Table("parcela_comissaos AS pc").
+		Select(`
+            COALESCE(SUM(cc.energia_mensal), 0)            AS energia,
+            COALESCE(SUM(cc.valor_gestao_mensal), 0)       AS gestao
+        `).
+		Joins("JOIN calculo_comissaos AS cc ON cc.id = pc.calculo_comissao_id").
+		Joins("JOIN negociacoes     AS n  ON n.id  = cc.negociacao_id").
+		Where("n.consultor_id = ?", userID).
+		// Se quiser, pode REMOVER esse filtro de status da negociação:
+		// Where("n.status IN ?", []string{"Fechada", "Contrato Assinado", "Ativa", "Vigente", "Em Execução"}).
+		Where("pc.status = ?", "Pago").
 		Scan(&res.ComissoesRecebidas)
 
-	// Total a receber (Pendente ou Atrasado)
-	h.DB.Table("parcela_comissaos").
-		Select(
-			"SUM(calculo_comissaos.energia_mensal) AS energia_a_receber, "+
-				"SUM(calculo_comissaos.valor_gestao_mensal) AS gestao_a_receber").
-		Joins("JOIN calculo_comissaos ON calculo_comissaos.id = parcela_comissaos.calculo_comissao_id").
-		Joins("JOIN negociacoes ON negociacoes.id = calculo_comissaos.negociacao_id").
-		Where("negociacoes.consultor_id = ? AND negociacoes.status = ? AND parcela_comissaos.status IN ?", userID, "Fechada", []string{"Pendente", "Atrasado"}).
+	// A RECEBER (Pendente OU Atrasado)
+	h.DB.Table("parcela_comissaos AS pc").
+		Select(`
+            COALESCE(SUM(cc.energia_mensal), 0)            AS energia,
+            COALESCE(SUM(cc.valor_gestao_mensal), 0)       AS gestao
+        `).
+		Joins("JOIN calculo_comissaos AS cc ON cc.id = pc.calculo_comissao_id").
+		Joins("JOIN negociacoes     AS n  ON n.id  = cc.negociacao_id").
+		Where("n.consultor_id = ?", userID).
+		// Mesmo comentário do de cima: pode remover o filtro por status da negociação.
+		// Where("n.status IN ?", []string{"Fechada", "Contrato Assinado", "Ativa", "Vigente", "Em Execução"}).
+		Where("pc.status IN ?", []string{"Pendente", "Atrasado"}).
 		Scan(&res.ComissoesAReceber)
 
 	w.Header().Set("Content-Type", "application/json")

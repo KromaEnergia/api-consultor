@@ -1,3 +1,4 @@
+// internal/parcelacomissao/model.go
 package parcelacomissao
 
 import (
@@ -13,6 +14,7 @@ type ParcelaComissao struct {
 	Valor             float64    `gorm:"not null;default:0" json:"valor"`
 	VolumeMensal      float64    `gorm:"not null;default:0" json:"volumeMensal"`
 	Anexo             string     `gorm:"size:255" json:"anexo"`
+	NotaFiscal        string     `gorm:"size:255" json:"notaFiscal"`
 	DataVencimento    time.Time  `gorm:"not null" json:"dataVencimento"`
 	Status            string     `gorm:"size:50;not null;default:'Pendente';index" json:"status"`
 	DataPagamento     *time.Time `json:"dataPagamento"`

@@ -146,3 +146,8 @@ func (r *Repository) RecalcTotalForCalculo(db *gorm.DB, calculoID uint) error {
 		Where("id = ?", calculoID).
 		Update("total_receber", total).Error
 }
+func (r *Repository) UpdateNotaFiscal(id uint, notaFiscal string) error {
+	return r.DB.Model(&ParcelaComissao{}).
+		Where("id = ?", id).
+		Update("nota_fiscal", notaFiscal).Error
+}
