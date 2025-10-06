@@ -61,23 +61,16 @@ func main() {
 		log.Fatal("Erro ao conectar no banco: ", err)
 	}
 
-	// -------- Drop & Migrate (apenas se você realmente quer limpar em startup) --------
-	// log.Println("[AVISO] APAGANDO TODAS AS TABELAS DO BANCO DE DADOS (startup drop)...")
-	// if err := database.Migrator().DropTable(
-	// 	&parcelacomissao.ParcelaComissao{},
-	// 	&calculocomissao.CalculoComissao{},
-	// 	&produtos.Produto{},
-	// 	&contrato.Contrato{},
-	// 	&models.Comentario{},
-	// 	&models.Negociacao{},
-	// 	&consultor.Consultor{},
-	// 	&comercial.Comercial{},
-	// 	&auth.RefreshToken{},
-	// ); err != nil {
-	// 	log.Fatal("Erro ao apagar tabelas: ", err)
-	// }
-	// log.Println("[SUCESSO] Todas as tabelas foram apagadas.")
+	// -------- Drop All (opcional via ENV: DB_DROP=1) --------
+	if os.Getenv("DB_DROP") == "1" {
+		log.Println("[DANGER] DB_DROP=1: APAGANDO TODAS AS TABELAS DO BANCO...")
+		if err := dropAllTables(database); err != nil {
+			log.Fatal("Erro ao apagar tabelas: ", err)
+		}
+		log.Println("[OK] Todas as tabelas foram apagadas.")
+	}
 
+	// -------- AutoMigrate --------
 	if err := database.AutoMigrate(
 		&comercial.Comercial{},
 		&consultor.Consultor{},
@@ -258,4 +251,20 @@ func main() {
 	}
 	log.Printf("Servidor rodando em :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
+}
+
+// dropAllTables apaga todas as tabelas em ordem segura para FKs.
+func dropAllTables(db *gorm.DB) error {
+	// Ordem importa: primeiro dependentes, depois pais.
+	return db.Migrator().DropTable(
+		&parcelacomissao.ParcelaComissao{},
+		&calculocomissao.CalculoComissao{},
+		&produtos.Produto{},
+		&contrato.Contrato{},
+		&models.Comentario{},
+		&models.Negociacao{},
+		&consultor.Consultor{},
+		&comercial.Comercial{},
+		&auth.RefreshToken{},
+	)
 }
